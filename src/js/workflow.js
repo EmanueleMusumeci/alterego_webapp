@@ -231,8 +231,19 @@ export async function standUpProcedures(ws, robotName) {
     return true;
 }
 
-export async function startAudio(ws, robotName) {
+
+export async function reStartAudio(ws, robotName) {
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.STT}`);
+    await new Promise(r => setTimeout(r, 2000));
+
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.TTS}`);
+    await new Promise(r => setTimeout(r, 2000));
+
+    return true;
+}
+
+export async function startAudio(ws, robotName) {
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.STT2}`);
     await new Promise(r => setTimeout(r, 2000));
 
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.TTS}`);
@@ -297,7 +308,8 @@ export async function goHomeProcedures(ws, robotName) {
     await new Promise(r => setTimeout(r, 3000));
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && rosnode kill /${robotName}${LAUNCH_COMMANDS.STOP_FACE_TRACKING}`);
     await new Promise(r => setTimeout(r, 3000));
-
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && rosnode kill /${robotName}${LAUNCH_COMMANDS.STOP_STT}`);
+    await new Promise(r => setTimeout(r, 3000));
     
     // Navigation from current position to home room
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && rostopic pub -1 /${robotName}/target_location std_msgs/String "data: '${LAUNCH_COMMANDS.DOCK_STATION}'"`);  // Doubled to be sure
@@ -421,11 +433,11 @@ export async function restartFromPauseProcedures(ws, state, robotName) {
     showLoading(true);
 
     // Start FACE TRACKING
-    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_TRACKING}`);
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_TRACKING}`);    
     await new Promise(r => setTimeout(r, 2000));
 
     // Start Audio Services
-    startAudio(ws, robotName);
+    reStartAudio(ws, robotName);
 
     // Start Breath Rosbag
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BREATH}`);
