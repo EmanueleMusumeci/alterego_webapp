@@ -233,22 +233,23 @@ export async function standUpProcedures(ws, robotName) {
 
 
 export async function reStartAudio(ws, robotName) {
-    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.STT}`);
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.TTS}`);
     await new Promise(r => setTimeout(r, 2000));
 
-    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.TTS}`);
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.STT}`);
     await new Promise(r => setTimeout(r, 2000));
 
     return true;
 }
 
 export async function startAudio(ws, robotName) {
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.TTS}`);
+    await new Promise(r => setTimeout(r, 2000));
+    
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.STT2}`);
     await new Promise(r => setTimeout(r, 2000));
 
-    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.TTS}`);
-    await new Promise(r => setTimeout(r, 2000));
-
+    
     return true;
 }
 
