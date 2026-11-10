@@ -108,8 +108,9 @@ export function updateLaunchCommands() {
     LAUNCH_COMMANDS.FACE_RECOGNITION = 'roslaunch alterego_face_recognition face_recognition.launch';
     LAUNCH_COMMANDS.FACE_TRACKING = 'roslaunch alterego_face_tracking face_tracking.launch';
     LAUNCH_COMMANDS.STT = 'roslaunch alterego_conversation speech2text.launch 2>/dev/null';
-    LAUNCH_COMMANDS.STT2 = 'roslaunch alterego_conversation speech2text_new.launch 2>/dev/null';
-    LAUNCH_COMMANDS.TTS = 'roslaunch alterego_text2speech text2speech.launch';
+    LAUNCH_COMMANDS.STT2 = 'roslaunch alterego_conversation speech2text_multilang.launch 2>/dev/null';
+    LAUNCH_COMMANDS.TTS = 'roslaunch alterego_text2speech text2speech_prefetch.launch';
+    LAUNCH_COMMANDS.SET_VOLUME_FIX = '/home/alterego-vision/AlterEGO_Adriano/set_volume_at_startup.sh';
     LAUNCH_COMMANDS.KILL_SPEECH = './home/alterego-vision/kill_speech.sh; /home/alterego-vision/kill_speech.sh; rosnode kill /robot_adriano/speech2text /robot_adriano/text2speech';
     LAUNCH_COMMANDS.NAVIGATION = 'roslaunch alterego_navigation autonomous_nav.launch';
     LAUNCH_COMMANDS.SAY_TIRED = 'roslaunch alterego_say_tired say_tired.launch';

@@ -73,7 +73,7 @@ export async function handlePowerButtonClick(ws, state) {
             // sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_RECOGNITION}`);
             // await new Promise(r => setTimeout(r, 2000));
 
-            // // Start FACE TRACKING
+            // Start FACE TRACKING
             // sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_TRACKING}`);
             // await new Promise(r => setTimeout(r, 2000));
             
