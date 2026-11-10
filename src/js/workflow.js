@@ -160,24 +160,26 @@ async function checkForPowerOn(ws, robotName){
 
 export async function activateRobotProcedures(ws, robotName, attemptId) {
     logStartupEvent(attemptId, 'startup.phase', { stage: 'roscore', outcome: 'dispatched' });
-    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.ROSCORE}`);
+    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.ROSCORE}`,
+        { attemptId, stage: 'roscore' });
     await new Promise(r => setTimeout(r, 2000));
     logStartupEvent(attemptId, 'startup.phase', { stage: 'usb_detector', outcome: 'dispatched' });
-    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.USB_DETECTOR}`);
+    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.USB_DETECTOR}`,
+        { attemptId, stage: 'usb_detector' });
     await new Promise(r => setTimeout(r, 2000));
     sendCommand(ROS_COMMANDS.CLEAR_LOG);
     await new Promise(r => setTimeout(r, 2000));
     
     // Initialize IMU
     logStartupEvent(attemptId, 'startup.phase', { stage: 'imu', outcome: 'checking' });
-    const imuInitialized = await initializeIMU(ws, robotName);
+    const imuInitialized = await initializeIMU(ws, robotName, attemptId);
     logStartupEvent(attemptId, 'startup.check', { stage: 'imu_first', outcome: imuInitialized ? 'passed' : 'failed' });
     if (!imuInitialized) {
         sendCommand(ROS_COMMANDS.CLEAR_LOG);
         await new Promise(r => setTimeout(r, 2000));
         
         // Try once again
-        const imuInitRetry = await initializeIMU(ws, robotName);
+        const imuInitRetry = await initializeIMU(ws, robotName, attemptId);
         logStartupEvent(attemptId, 'startup.check', { stage: 'imu_retry', outcome: imuInitRetry ? 'passed' : 'failed' });
         if (!imuInitRetry){
             return false;
@@ -192,7 +194,7 @@ export async function activateRobotProcedures(ws, robotName, attemptId) {
     }
 
     // Docking Backward
-    const backwardComplete =  await handleDockingMovement(ws, robotName, "backward", 0.5);
+    const backwardComplete =  await handleDockingMovement(ws, robotName, "backward", 0.5, attemptId);
     logStartupEvent(attemptId, 'startup.check', { stage: 'docking_backward', outcome: backwardComplete ? 'reported_complete' : 'failed' });
     if (!backwardComplete) {
         return false;
@@ -215,15 +217,18 @@ export async function standUpProcedures(ws, robotName, attemptId) {
 
     // Start Pilot
     logStartupEvent(attemptId, 'startup.service', { stage: 'pilot', outcome: 'dispatched' });
-    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.PILOT}`);
+    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.PILOT}`,
+        { attemptId, stage: 'pilot' });
 
     // Start FACE EXPRESSION
     logStartupEvent(attemptId, 'startup.service', { stage: 'face_expression', outcome: 'dispatched' });
-    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_EXPRESSION}`);
+    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_EXPRESSION}`,
+        { attemptId, stage: 'face_expression' });
 
     // Start FACE TRACKING and FACE RECOGNITION
     logStartupEvent(attemptId, 'startup.service', { stage: 'face_tracking', outcome: 'dispatched' });
-    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_TRACKING}`);
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_TRACKING}`,
+        { attemptId, stage: 'face_tracking' });
     await new Promise(r => setTimeout(r, 2000));
 
     // Start Audio Services
@@ -231,17 +236,20 @@ export async function standUpProcedures(ws, robotName, attemptId) {
 
     // Start Breath Rosbag
     logStartupEvent(attemptId, 'startup.service', { stage: 'breath', outcome: 'dispatched' });
-    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BREATH}`);
+    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BREATH}`,
+        { attemptId, stage: 'breath' });
     await new Promise(r => setTimeout(r, 2000));
 
     // Start Navigation
     logStartupEvent(attemptId, 'startup.service', { stage: 'navigation', outcome: 'dispatched' });
-    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.NAVIGATION}`);
+    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.NAVIGATION}`,
+        { attemptId, stage: 'navigation' });
     await new Promise(r => setTimeout(r, 2000));
 
     // Send to Target Location
     logStartupEvent(attemptId, 'startup.service', { stage: 'target_location', outcome: 'dispatched' });
-    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && rostopic pub -1 /${robotName}/target_location std_msgs/String "data: '${LAUNCH_COMMANDS.TARGET_LOC}'"`);
+    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && rostopic pub -1 /${robotName}/target_location std_msgs/String "data: '${LAUNCH_COMMANDS.TARGET_LOC}'"`,
+        { attemptId, stage: 'target_location' });
     await new Promise(r => setTimeout(r, 4000));
 
     return true;
@@ -260,11 +268,13 @@ export async function reStartAudio(ws, robotName) {
 
 export async function startAudio(ws, robotName, attemptId) {
     if (attemptId) logStartupEvent(attemptId, 'startup.service', { stage: 'tts', outcome: 'dispatched' });
-    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.TTS}`);
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.TTS}`,
+        { attemptId, stage: 'tts' });
     await new Promise(r => setTimeout(r, 2000));
     
     if (attemptId) logStartupEvent(attemptId, 'startup.service', { stage: 'stt', outcome: 'dispatched' });
-    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.STT2}`);
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.STT2}`,
+        { attemptId, stage: 'stt' });
     await new Promise(r => setTimeout(r, 2000));
 
     

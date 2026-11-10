@@ -9,13 +9,22 @@ import { logStartupEvent } from './startupLog.js';
  * @param {string} command - The command to execute
  * @returns {Promise<void>}
  */
-export function sendCommand(command) {
+function commandPayload(command, startup) {
+    const payload = { command };
+    if (startup && typeof startup === 'object' && startup.attemptId) {
+        payload.startupAttemptId = startup.attemptId;
+        payload.startupStage = startup.stage;
+    }
+    return payload;
+}
+
+export function sendCommand(command, startup) {
     fetch('/execute', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ command }),
+        body: JSON.stringify(commandPayload(command, startup)),
     })
     .then(() => console.log(`Command sent: ${command}`))
     .catch(error => console.error('Error sending command:', error));
@@ -26,14 +35,14 @@ export function sendCommand(command) {
  * @param {string} command - The command to execute
  * @returns {Promise<string>}
  */
-export async function sendLocalCommand(command) {
+export async function sendLocalCommand(command, startup) {
     try {
         const response = await fetch('/execute-local', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ command }),
+            body: JSON.stringify(commandPayload(command, startup)),
         });
         if (!response.ok) {
             throw new Error(`Error in command execution: ${response.status}`);
@@ -172,7 +181,7 @@ export async function pingRemoteComputer() {
  * @param {string} robotName - Name of the robot
  * @returns {Promise<boolean>} True if initialization successful
  */
-export async function initializeIMU(ws, robotName) {
+export async function initializeIMU(ws, robotName, attemptId) {
     try {
         // First popup - Calibration warning
         /*const initIMU = await showSyncedPopup(ws, {
@@ -190,7 +199,8 @@ export async function initializeIMU(ws, robotName) {
         */
 
         // Send IMU command
-        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.IMU}`);
+        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.IMU}`,
+            { attemptId, stage: 'imu' });
         console.log('IMU initialization command sent');
 
         // Add a small delay to ensure the first popup is fully closed
@@ -427,7 +437,7 @@ export async function waitForPowerAlertTrigger(ws, needPower) {
  * @param {string} robotName - Name of the robot
  * @returns {Promise<boolean>} True if movement completed
  */
-export async function handleDockingMovement(ws, robotName, direction, maxLinDistance) {
+export async function handleDockingMovement(ws, robotName, direction, maxLinDistance, attemptId) {
     try {
         console.log("Starting " + direction + " movement...");
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -456,7 +466,8 @@ export async function handleDockingMovement(ws, robotName, direction, maxLinDist
         
 
         // Send docking movement command
-        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.DOCKING} movementDirection:="${direction}" maxLinDistance:=${maxLinDistance}`);
+        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.DOCKING} movementDirection:="${direction}" maxLinDistance:=${maxLinDistance}`,
+            { attemptId, stage: `docking_${direction}` });
         
         // Add a small delay before showing the progress popup
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -556,12 +567,14 @@ export async function initializeSystem(ws, robotName, attemptId) {
 
         // Start wheels control
         logStartupEvent(attemptId, 'startup.service', { stage: 'wheels', outcome: 'dispatched' });
-        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.WHEELS}`);
+        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.WHEELS}`,
+            { attemptId, stage: 'wheels' });
         await new Promise(r => setTimeout(r, 2000));
         
         // Activate arm motors
         logStartupEvent(attemptId, 'startup.service', { stage: 'body_activation', outcome: 'dispatched' });
-        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BODY_ACTIVATION}`);
+        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BODY_ACTIVATION}`,
+            { attemptId, stage: 'body_activation' });
         await new Promise(r => setTimeout(r, 2000));
 
         console.log("Pre Checking arm motors activation...");
@@ -576,7 +589,8 @@ export async function initializeSystem(ws, robotName, attemptId) {
         
         // Start movement control
         logStartupEvent(attemptId, 'startup.service', { stage: 'body_movement', outcome: 'dispatched' });
-        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BODY_MOVEMENT}`);
+        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BODY_MOVEMENT}`,
+            { attemptId, stage: 'body_movement' });
         await new Promise(r => setTimeout(r, 2000));
         
         

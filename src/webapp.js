@@ -43,6 +43,18 @@ app.post('/api/startup-log', (req, res) => {
     res.status(204).end();
 });
 
+function logStartupCommand(req, event, outcome, detail) {
+    const { startupAttemptId, startupStage } = req.body || {};
+    if (typeof startupAttemptId !== 'string' || !/^[a-z0-9-]{1,40}$/i.test(startupAttemptId) ||
+        typeof startupStage !== 'string' || !/^[a-z0-9_]{2,40}$/.test(startupStage)) return;
+    const entry = {
+        serverTime: new Date().toISOString(), attemptId: startupAttemptId,
+        event, stage: startupStage, outcome
+    };
+    if (detail !== undefined) entry.detail = String(detail).replace(/[\r\n]/g, ' ').slice(0, 100);
+    console.log('[startup] ' + JSON.stringify(entry));
+}
+
 // Static file serving
 app.use(express.static(__dirname));
 app.use('/images', express.static(path.join(__dirname, 'images')));
@@ -208,10 +220,13 @@ function executeLocal(command) {
 }
 
 app.post('/execute-local', async (req, res) => {
+    logStartupCommand(req, 'command.local', 'requested');
     try {
         const output = await executeLocal(req.body.command);
+        logStartupCommand(req, 'command.local', 'completed');
         res.json({ success: true, output });
     } catch (error) {
+        logStartupCommand(req, 'command.local', 'failed', error.code || error.signal || 'unknown');
         console.error('Execute local error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
@@ -254,6 +269,7 @@ app.get('/', (req, res) => {
 
 
 app.post('/execute', async (req, res) => {
+    logStartupCommand(req, 'command.remote', 'requested');
     const client = new Client(); // Create a new SSH client for this request
     const connectionParams = {
         host: NUC_BASE_IP,
@@ -267,6 +283,7 @@ app.post('/execute', async (req, res) => {
         client.on('ready', () => {
             client.exec(req.body.command, (err, stream) => {
                 if (err) {
+                    logStartupCommand(req, 'command.remote', 'failed', err.code || 'exec');
                     console.error('Execute error:', err);
                     res.status(500).json({ success: false, error: err.message });
                     client.end(); // Close the connection
@@ -281,6 +298,11 @@ app.post('/execute', async (req, res) => {
                     errorOutput += data.toString();
                 });
 
+                stream.on('close', (code, signal) => {
+                    logStartupCommand(req, 'command.remote', code === 0 ? 'completed' : 'failed',
+                        `exit=${code} signal=${signal}`);
+                });
+
                 /*stream.on('close', () => {
                     client.end(); // Close the connection
                     if (errorOutput) {
@@ -292,11 +314,13 @@ app.post('/execute', async (req, res) => {
                 });*/
 
                 // Rispondi subito con successo
+                logStartupCommand(req, 'command.remote', 'accepted');
                 res.json({ success: true });
             });
         });
 
         client.on('error', (err) => {
+            logStartupCommand(req, 'command.remote', 'failed', err.code || 'connection');
             console.error('SSH connection error:', err);
             if (err.code === 'ECONNRESET') {
                 console.log('ECONNRESET noticed...');  // Allow to move on turn off other NUC
@@ -308,6 +332,7 @@ app.post('/execute', async (req, res) => {
 
         client.connect(connectionParams); // Connect the client
     } catch (error) {
+        logStartupCommand(req, 'command.remote', 'failed', error.code || 'exception');
         console.error('Execute error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
