@@ -33,21 +33,21 @@ let robotName;
  * Gestisce gli aggiornamenti di stato e la riconnessione automatica
  */
 function initWebSocket() {
-    ws = new WebSocket(`ws://localhost:3000`);
+    ws = new WebSocket(`ws://${window.location.host}`);
+    ws.onopen = () => {
+        console.log('WebSocket connected');
+        ws.send(JSON.stringify({ type: 'requestInitialState' }));
+    };
    
     // Handler per i messaggi in arrivo
     ws.onmessage = (event) => {
         const message = JSON.parse(event.data);
-        // Aggiungi handler per la connessione
-        ws.onopen = () => {
-            console.log('WebSocket connected');
-            // Richiedi lo stato iniziale appena connesso
-            ws.send(JSON.stringify({ type: 'requestInitialState' }));
-        };
         if (message.type === 'stateUpdate') {
             // Aggiorna lo stato locale con i nuovi dati
             const newState = message.data;
-            state = { ...state, ...newState };
+            Object.assign(state, newState, {
+                uiState: { ...state.uiState, ...(newState.uiState || {}) }
+            });
             
             // Aggiorna l'interfaccia utente
             updateUI(state);
@@ -77,12 +77,13 @@ async function initApp() {
     // Initialize config first
     await initializeConfig();
     console.log('Config initialized');
-    // Inizializza WebSocket
-    initWebSocket();
 
     // Carica i componenti UI
     const resLoad = await loadComponent('button-grid', 'components/button-grid.html');
     const resComp = await loadComponent('status-panel', 'components/status-panel.html');
+
+    // Connect after the controls exist: the server sends state immediately on connect.
+    initWebSocket();
 
     // Configura i pulsanti
     const mainBtn = document.getElementById('mainBtn');

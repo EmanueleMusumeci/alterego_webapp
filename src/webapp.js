@@ -10,7 +10,9 @@ const os = require('os'); // Add os module to get system information
 const { wss } = require('./js/websocket');
 
 const app = express();
-const port = 3000;
+const port = Number(process.env.PORT || 3000);
+const host = process.env.HOST || '0.0.0.0';
+const isolatedTest = process.env.WEBAPP_TEST_MODE === '1';
 // Initialize with a default value
 let NUC_BASE_IP = '192.168.88.110';
 let NUC_VISION_IP = '192.168.88.111';
@@ -24,6 +26,11 @@ console.log(`\nCurrent Username: ${currentUsername} \nRemote Username: ${remoteU
 // Middleware setup
 app.use(bodyParser.json());
 app.use(express.json());
+if (isolatedTest) {
+    app.use(['/execute', '/execute-local', '/grep-command'], (_req, res) => {
+        res.status(503).json({ error: 'Hardware commands disabled in isolated test mode' });
+    });
+}
 
 app.post('/api/startup-log', (req, res) => {
     const { attemptId, event, clientTime, stage, outcome, pipelineState, isPowered, detail } = req.body || {};
@@ -108,8 +115,8 @@ function getNucIPs() {
 }
 // Use the async function properly
 getNucIPs().then(async ips => {
-    NUC_BASE_IP = ips.base;
-    NUC_VISION_IP = ips.vision;
+    NUC_BASE_IP = isolatedTest ? '127.0.0.1' : ips.base;
+    NUC_VISION_IP = isolatedTest ? '127.0.0.1' : ips.vision;
     
     // Get the robot version from .bashrc
     let robotVersion = 2; // Default value
@@ -156,8 +163,8 @@ getNucIPs().then(async ips => {
 
 // Move server startup to a function
 function startServer() {   
-    const server = app.listen(port, '0.0.0.0', () => {
-        console.log(`Server running at http://0.0.0.0:${port}`);
+    const server = app.listen(port, host, () => {
+        console.log(`Server running at http://${host}:${port}`);
     });
     
     // Collegamento WebSocket al server HTTP

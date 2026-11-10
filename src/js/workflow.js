@@ -1,4 +1,4 @@
-import { sendCommand,sendLocalCommand, getRobotName, initializeIMU, handleDockingMovement, initializeSystem, waitForPowerAlertTrigger, showSyncedPopup, targetReachedCheck, checkNodeStatus, pingRemoteComputer} from './api.js';
+import { sendCommand,sendLocalCommand, getRobotName, initializeIMU, handleDockingMovement, initializeSystem, waitForPowerAlertTrigger, showSyncedPopup, targetReachedCheck, checkNodeStatus, pingRemoteComputer, waitForNodes} from './api.js';
 import { batteryMonitor } from './batterymonitor.js';
 import { ROS_COMMANDS, LAUNCH_COMMANDS, STATE } from './constants.js';
 import { showLoading, updateUI } from './utils.js';
@@ -160,9 +160,12 @@ async function checkForPowerOn(ws, robotName){
 
 export async function activateRobotProcedures(ws, robotName, attemptId) {
     logStartupEvent(attemptId, 'startup.phase', { stage: 'roscore', outcome: 'dispatched' });
-    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.ROSCORE}`,
+    const roscoreAccepted = await sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.ROSCORE}`,
         { attemptId, stage: 'roscore' });
-    await new Promise(r => setTimeout(r, 2000));
+    if (!roscoreAccepted) return false;
+    const masterReady = await waitForNodes(['/rosout'], 15000);
+    logStartupEvent(attemptId, 'startup.check', { stage: 'ros_master', outcome: masterReady.ready ? 'passed' : 'failed' });
+    if (!masterReady.ready) return false;
     logStartupEvent(attemptId, 'startup.phase', { stage: 'usb_detector', outcome: 'dispatched' });
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.USB_DETECTOR}`,
         { attemptId, stage: 'usb_detector' });
@@ -232,7 +235,7 @@ export async function standUpProcedures(ws, robotName, attemptId) {
     await new Promise(r => setTimeout(r, 2000));
 
     // Start Audio Services
-    startAudio(ws, robotName, attemptId);
+    await startAudio(ws, robotName, attemptId);
 
     // Start Breath Rosbag
     logStartupEvent(attemptId, 'startup.service', { stage: 'breath', outcome: 'dispatched' });
@@ -242,14 +245,23 @@ export async function standUpProcedures(ws, robotName, attemptId) {
 
     // Start Navigation
     logStartupEvent(attemptId, 'startup.service', { stage: 'navigation', outcome: 'dispatched' });
-    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.NAVIGATION}`,
+    const navigationAccepted = await sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.NAVIGATION}`,
         { attemptId, stage: 'navigation' });
-    await new Promise(r => setTimeout(r, 2000));
+    if (!navigationAccepted) return false;
+    const navigationReady = await waitForNodes([
+        `/${robotName}/move_base`, `/${robotName}/navigation`
+    ], 20000);
+    logStartupEvent(attemptId, 'startup.check', {
+        stage: 'navigation_node', outcome: navigationReady.ready ? 'passed' : 'failed',
+        detail: navigationReady.missing.join(',')
+    });
+    if (!navigationReady.ready) return false;
 
     // Send to Target Location
     logStartupEvent(attemptId, 'startup.service', { stage: 'target_location', outcome: 'dispatched' });
-    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && rostopic pub -1 /${robotName}/target_location std_msgs/String "data: '${LAUNCH_COMMANDS.TARGET_LOC}'"`,
+    const targetAccepted = await sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && rostopic pub -1 /${robotName}/target_location std_msgs/String "data: '${LAUNCH_COMMANDS.TARGET_LOC}'"`,
         { attemptId, stage: 'target_location' });
+    if (!targetAccepted) return false;
     await new Promise(r => setTimeout(r, 4000));
 
     return true;
@@ -394,7 +406,7 @@ export async function robotPowerOnClick(ws, state, robotName, attemptId = newSta
     robotName = await getRobotName();   // Doubled to be sure
 
     showLoading(true);
-   
+    try {
     // Initialize Timer to monitor power issues and battery level
     startPowerMonitor(ws, state, robotName);
 
@@ -422,9 +434,10 @@ export async function robotPowerOnClick(ws, state, robotName, attemptId = newSta
     updatePipelineState(ws, state, STATE.WORK_MODE);
     logStartupEvent(attemptId, 'startup.complete', { pipelineState: state.pipelineState });
 
-    showLoading(false);
-
     return true;
+    } finally {
+        showLoading(false);
+    }
 }
 
 export async function robotPowerOffClick(ws, state, do_check = true) {
