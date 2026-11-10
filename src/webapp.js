@@ -25,6 +25,24 @@ console.log(`\nCurrent Username: ${currentUsername} \nRemote Username: ${remoteU
 app.use(bodyParser.json());
 app.use(express.json());
 
+app.post('/api/startup-log', (req, res) => {
+    const { attemptId, event, clientTime, stage, outcome, pipelineState, isPowered, detail } = req.body || {};
+    if (typeof attemptId !== 'string' || !/^[a-z0-9-]{1,40}$/i.test(attemptId) ||
+        typeof event !== 'string' || !/^([a-z]+\.)?[a-z_]{2,40}$/.test(event)) {
+        return res.status(400).json({ error: 'Invalid startup event' });
+    }
+
+    const entry = { serverTime: new Date().toISOString(), attemptId, event };
+    if (typeof clientTime === 'string' && /^\d{4}-\d\d-\d\dT/.test(clientTime)) entry.clientTime = clientTime.slice(0, 30);
+    if (typeof stage === 'string') entry.stage = stage.replace(/[^a-z0-9_]/gi, '').slice(0, 40);
+    if (typeof outcome === 'string') entry.outcome = outcome.replace(/[^a-z0-9_]/gi, '').slice(0, 40);
+    if (Number.isInteger(pipelineState)) entry.pipelineState = pipelineState;
+    if (typeof isPowered === 'boolean') entry.isPowered = isPowered;
+    if (typeof detail === 'string') entry.detail = detail.replace(/[\r\n]/g, ' ').slice(0, 160);
+    console.log('[startup] ' + JSON.stringify(entry));
+    res.status(204).end();
+});
+
 // Static file serving
 app.use(express.static(__dirname));
 app.use('/images', express.static(path.join(__dirname, 'images')));

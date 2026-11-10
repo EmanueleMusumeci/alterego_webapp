@@ -2,6 +2,7 @@ import { sendCommand,sendLocalCommand, getRobotName, initializeIMU, handleDockin
 import { batteryMonitor } from './batterymonitor.js';
 import { ROS_COMMANDS, LAUNCH_COMMANDS, STATE } from './constants.js';
 import { showLoading, updateUI } from './utils.js';
+import { logStartupEvent, newStartupAttemptId } from './startupLog.js';
 
 var batteryInterval;
 
@@ -157,22 +158,27 @@ async function checkForPowerOn(ws, robotName){
     return true;
 }
 
-export async function activateRobotProcedures(ws, robotName) {
+export async function activateRobotProcedures(ws, robotName, attemptId) {
+    logStartupEvent(attemptId, 'startup.phase', { stage: 'roscore', outcome: 'dispatched' });
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.ROSCORE}`);
     await new Promise(r => setTimeout(r, 2000));
+    logStartupEvent(attemptId, 'startup.phase', { stage: 'usb_detector', outcome: 'dispatched' });
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.USB_DETECTOR}`);
     await new Promise(r => setTimeout(r, 2000));
     sendCommand(ROS_COMMANDS.CLEAR_LOG);
     await new Promise(r => setTimeout(r, 2000));
     
     // Initialize IMU
+    logStartupEvent(attemptId, 'startup.phase', { stage: 'imu', outcome: 'checking' });
     const imuInitialized = await initializeIMU(ws, robotName);
+    logStartupEvent(attemptId, 'startup.check', { stage: 'imu_first', outcome: imuInitialized ? 'passed' : 'failed' });
     if (!imuInitialized) {
         sendCommand(ROS_COMMANDS.CLEAR_LOG);
         await new Promise(r => setTimeout(r, 2000));
         
         // Try once again
         const imuInitRetry = await initializeIMU(ws, robotName);
+        logStartupEvent(attemptId, 'startup.check', { stage: 'imu_retry', outcome: imuInitRetry ? 'passed' : 'failed' });
         if (!imuInitRetry){
             return false;
         }
@@ -180,12 +186,14 @@ export async function activateRobotProcedures(ws, robotName) {
 
     // Check For Power ON
     const checkPowerON = await checkForPowerOn(ws, robotName);
+    logStartupEvent(attemptId, 'startup.check', { stage: 'power_on', outcome: checkPowerON ? 'passed' : 'failed' });
     if (!checkPowerON) {
         return false;
     }
 
     // Docking Backward
     const backwardComplete =  await handleDockingMovement(ws, robotName, "backward", 0.5);
+    logStartupEvent(attemptId, 'startup.check', { stage: 'docking_backward', outcome: backwardComplete ? 'reported_complete' : 'failed' });
     if (!backwardComplete) {
         return false;
     }
@@ -193,10 +201,12 @@ export async function activateRobotProcedures(ws, robotName) {
     return true;
 }
 
-export async function standUpProcedures(ws, robotName) {
+export async function standUpProcedures(ws, robotName, attemptId) {
 
     // Initialize system (activates wheels and arms (activation e movement))
-    const systemInitialized = await initializeSystem(ws, robotName);
+    logStartupEvent(attemptId, 'startup.phase', { stage: 'system', outcome: 'checking' });
+    const systemInitialized = await initializeSystem(ws, robotName, attemptId);
+    logStartupEvent(attemptId, 'startup.check', { stage: 'system', outcome: systemInitialized ? 'passed' : 'failed' });
     if (!systemInitialized) {
         return false;
     }
@@ -204,27 +214,33 @@ export async function standUpProcedures(ws, robotName) {
     // Activate all remaining additional nodes
 
     // Start Pilot
+    logStartupEvent(attemptId, 'startup.service', { stage: 'pilot', outcome: 'dispatched' });
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.PILOT}`);
 
     // Start FACE EXPRESSION
+    logStartupEvent(attemptId, 'startup.service', { stage: 'face_expression', outcome: 'dispatched' });
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_EXPRESSION}`);
 
     // Start FACE TRACKING and FACE RECOGNITION
+    logStartupEvent(attemptId, 'startup.service', { stage: 'face_tracking', outcome: 'dispatched' });
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_TRACKING}`);
     await new Promise(r => setTimeout(r, 2000));
 
     // Start Audio Services
-    startAudio(ws, robotName);
+    startAudio(ws, robotName, attemptId);
 
     // Start Breath Rosbag
+    logStartupEvent(attemptId, 'startup.service', { stage: 'breath', outcome: 'dispatched' });
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BREATH}`);
     await new Promise(r => setTimeout(r, 2000));
 
     // Start Navigation
+    logStartupEvent(attemptId, 'startup.service', { stage: 'navigation', outcome: 'dispatched' });
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.NAVIGATION}`);
     await new Promise(r => setTimeout(r, 2000));
 
     // Send to Target Location
+    logStartupEvent(attemptId, 'startup.service', { stage: 'target_location', outcome: 'dispatched' });
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && rostopic pub -1 /${robotName}/target_location std_msgs/String "data: '${LAUNCH_COMMANDS.TARGET_LOC}'"`);
     await new Promise(r => setTimeout(r, 4000));
 
@@ -242,10 +258,12 @@ export async function reStartAudio(ws, robotName) {
     return true;
 }
 
-export async function startAudio(ws, robotName) {
+export async function startAudio(ws, robotName, attemptId) {
+    if (attemptId) logStartupEvent(attemptId, 'startup.service', { stage: 'tts', outcome: 'dispatched' });
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.TTS}`);
     await new Promise(r => setTimeout(r, 2000));
     
+    if (attemptId) logStartupEvent(attemptId, 'startup.service', { stage: 'stt', outcome: 'dispatched' });
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.STT2}`);
     await new Promise(r => setTimeout(r, 2000));
 
@@ -360,8 +378,9 @@ async function stopRobotToPowerOff(ws, state, do_check = true) {
     return true;
 }
 
-export async function robotPowerOnClick(ws, state, robotName) {
+export async function robotPowerOnClick(ws, state, robotName, attemptId = newStartupAttemptId()) {
 
+    logStartupEvent(attemptId, 'startup.begin', { pipelineState: state.pipelineState, isPowered: state.isPowered });
     robotName = await getRobotName();   // Doubled to be sure
 
     showLoading(true);
@@ -371,22 +390,27 @@ export async function robotPowerOnClick(ws, state, robotName) {
 
     // Notify next workflow state
     updatePipelineState(ws, state, STATE.ACTIVATE_ROBOT);
+    logStartupEvent(attemptId, 'startup.state', { stage: 'activate_robot', pipelineState: state.pipelineState });
     
     // Activate Robot Core nodes and moves backward
-    if (!(await activateRobotProcedures(ws, robotName))){
+    if (!(await activateRobotProcedures(ws, robotName, attemptId))){
+        logStartupEvent(attemptId, 'startup.failed', { stage: 'activate_robot', pipelineState: state.pipelineState });
         return false;
     }
     
     // Notify next workflow state
     updatePipelineState(ws, state, STATE.STAND_UP);
+    logStartupEvent(attemptId, 'startup.state', { stage: 'stand_up', pipelineState: state.pipelineState });
     
     // Activate all the rest of nodes 
-    if (!(await standUpProcedures(ws, robotName))){
+    if (!(await standUpProcedures(ws, robotName, attemptId))){
+        logStartupEvent(attemptId, 'startup.failed', { stage: 'stand_up', pipelineState: state.pipelineState });
         return false;
     }         
     
     // Notify next workflow state
     updatePipelineState(ws, state, STATE.WORK_MODE);
+    logStartupEvent(attemptId, 'startup.complete', { pipelineState: state.pipelineState });
 
     showLoading(false);
 

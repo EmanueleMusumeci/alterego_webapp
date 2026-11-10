@@ -2,6 +2,7 @@ import { batteryMonitor } from './batterymonitor.js';
 import { NUC_BASE_IP, ROS_CATKIN_WS, ROS_HOSTNAME, ROS_IP, ROS_MASTER_URI, ROS_SRC_FOLDER } from './constants.js';
 import { ROS_COMMANDS, LAUNCH_COMMANDS } from './constants.js';
 import { updateBatteryGraphics } from './utils.js';
+import { logStartupEvent } from './startupLog.js';
 
 /**
  * Executes a generic command through the server
@@ -517,7 +518,7 @@ export async function handleDockingMovement(ws, robotName, direction, maxLinDist
  * @param {string} robotName - Name of the robot
  * @returns {Promise<boolean>} True if initialization successful
  */
-export async function initializeSystem(ws, robotName) {
+export async function initializeSystem(ws, robotName, attemptId) {
     try {
         // Wait for system stabilization
         await new Promise(resolve => setTimeout(resolve, 5000));
@@ -554,10 +555,12 @@ export async function initializeSystem(ws, robotName) {
         }*/
 
         // Start wheels control
+        logStartupEvent(attemptId, 'startup.service', { stage: 'wheels', outcome: 'dispatched' });
         sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.WHEELS}`);
         await new Promise(r => setTimeout(r, 2000));
         
         // Activate arm motors
+        logStartupEvent(attemptId, 'startup.service', { stage: 'body_activation', outcome: 'dispatched' });
         sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BODY_ACTIVATION}`);
         await new Promise(r => setTimeout(r, 2000));
 
@@ -565,22 +568,26 @@ export async function initializeSystem(ws, robotName) {
 
         // Check motors activation
         const motorsActivated = await checkMotorsActivation(ws, robotName);
+        logStartupEvent(attemptId, 'startup.check', { stage: 'arm_motors', outcome: motorsActivated ? 'passed' : 'failed' });
         if (!motorsActivated) return false;
         
         await new Promise(r => setTimeout(r, 2000));
         console.log("Pre Checking arm motors movement...");
         
         // Start movement control
+        logStartupEvent(attemptId, 'startup.service', { stage: 'body_movement', outcome: 'dispatched' });
         sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BODY_MOVEMENT}`);
         await new Promise(r => setTimeout(r, 2000));
         
         
         const movementInitialized = await checkMovementController(ws);
+        logStartupEvent(attemptId, 'startup.check', { stage: 'movement_timer', outcome: movementInitialized ? 'elapsed' : 'failed' });
         if (!movementInitialized) return false;       
 
         return true;
 
     } catch (error) {
+        logStartupEvent(attemptId, 'startup.exception', { stage: 'system', detail: error.message });
         console.error('Error in system initialization:', error);
         await showSyncedPopup(ws, {
             title: 'Error',
