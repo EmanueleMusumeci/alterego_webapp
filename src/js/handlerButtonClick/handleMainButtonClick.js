@@ -4,6 +4,8 @@ import { updateUI } from '../utils.js';
 import { robotPowerOnClick, pauseProcedures, restartFromPauseProcedures, endChargeProcedures } from '../workflow.js';
 import { logStartupEvent, newStartupAttemptId } from '../startupLog.js';
 
+let mainButtonBusy = false;
+
 /**
  * Gestisce il click sul pulsante di accensione
  * Controlla la connessione e avvia/spegne il sistema
@@ -11,6 +13,11 @@ import { logStartupEvent, newStartupAttemptId } from '../startupLog.js';
 export async function handleMainButtonClick(ws, state, robotName) {
 
     const attemptId = newStartupAttemptId();
+    if (mainButtonBusy) {
+        logStartupEvent(attemptId, 'button.ignored', { outcome: 'busy', pipelineState: state.pipelineState });
+        return false;
+    }
+    mainButtonBusy = true;
     let handled = false;
     const mainBtn = document.getElementById('mainBtn');
     mainBtn.disabled = true;
@@ -88,13 +95,6 @@ export async function handleMainButtonClick(ws, state, robotName) {
             }
             else {
                 // Clicked to Start Robot
-                robotPowerOnClick(ws, state, robotName, attemptId)
-                    .then(result => logStartupEvent(attemptId, 'button.start_settled', {
-                        outcome: result ? 'success' : 'failed', pipelineState: state.pipelineState
-                    }))
-                    .catch(error => logStartupEvent(attemptId, 'button.start_settled', {
-                        outcome: 'exception', pipelineState: state.pipelineState, detail: error.message
-                    }));
                 logStartupEvent(attemptId, 'button.start_dispatched', { pipelineState: state.pipelineState });
                 state.isPowered = true;
 
@@ -103,6 +103,18 @@ export async function handleMainButtonClick(ws, state, robotName) {
                     type: 'stateUpdate',
                     data: { isPowered: state.isPowered }
                 }));
+                const started = await robotPowerOnClick(ws, state, robotName, attemptId);
+                logStartupEvent(attemptId, 'button.start_settled', {
+                    outcome: started ? 'success' : 'failed', pipelineState: state.pipelineState
+                });
+                if (!started) {
+                    await showSyncedPopup(ws, {
+                        title: 'Startup incomplete',
+                        text: 'Robot startup did not finish. Keep the robot supported and use the supervised recovery procedure.',
+                        icon: 'error'
+                    });
+                    return false;
+                }
             }            
         }
         if (!handled) {
@@ -123,10 +135,8 @@ export async function handleMainButtonClick(ws, state, robotName) {
         }));
     }
     finally {
-
+        mainButtonBusy = false;
         updateUI(state);
-        
-        mainBtn.disabled = false;
-        logStartupEvent(attemptId, 'button.reenabled', { pipelineState: state.pipelineState, isPowered: state.isPowered });
+        logStartupEvent(attemptId, 'button.settled', { pipelineState: state.pipelineState, isPowered: state.isPowered });
     }
 }

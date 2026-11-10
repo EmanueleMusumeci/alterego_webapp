@@ -19,15 +19,22 @@ function commandPayload(command, startup) {
 }
 
 export function sendCommand(command, startup) {
-    fetch('/execute', {
+    return fetch('/execute', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify(commandPayload(command, startup)),
     })
-    .then(() => console.log(`Command sent: ${command}`))
-    .catch(error => console.error('Error sending command:', error));
+    .then(response => {
+        if (!response.ok) throw new Error(`Command request failed: HTTP ${response.status}`);
+        console.log(`Command sent: ${command}`);
+        return true;
+    })
+    .catch(error => {
+        console.error('Error sending command:', error);
+        return false;
+    });
 }
 
 /**
@@ -148,6 +155,37 @@ export async function checkNodeStatus(nodeName) {
     }
 }
 
+/** Wait for exact ROS node names; missing nodes are returned on timeout. */
+export async function waitForNodes(nodeNames, timeoutMs = 15000) {
+    let missing = [...nodeNames];
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const controller = new AbortController();
+        const requestTimer = setTimeout(() => controller.abort(), Math.min(3000, deadline - Date.now()));
+        try {
+            const response = await fetch('/grep-command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ command: `${ROS_COMMANDS.SETUP} && rosnode list` }),
+                signal: controller.signal
+            });
+            if (response.ok) {
+                const data = await response.json();
+                const running = new Set((data.output || '').split(/\r?\n/).map(name => name.trim()));
+                missing = nodeNames.filter(name => !running.has(name));
+                if (!missing.length) return { ready: true, missing: [] };
+            }
+        } catch (error) {
+            // A launching ROS master may refuse requests briefly; retry until the deadline.
+        } finally {
+            clearTimeout(requestTimer);
+        }
+        const remainingMs = deadline - Date.now();
+        if (remainingMs > 0) await new Promise(resolve => setTimeout(resolve, Math.min(1000, remainingMs)));
+    }
+    return { ready: false, missing };
+}
+
 /**
  * Checks connection with remote computer via ping
  * @returns {Promise<boolean>} True if connection successful, false otherwise
@@ -199,8 +237,9 @@ export async function initializeIMU(ws, robotName, attemptId) {
         */
 
         // Send IMU command
-        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.IMU}`,
+        const imuLaunchAccepted = await sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.IMU}`,
             { attemptId, stage: 'imu' });
+        if (!imuLaunchAccepted) return false;
         console.log('IMU initialization command sent');
 
         // Add a small delay to ensure the first popup is fully closed
@@ -221,6 +260,16 @@ export async function initializeIMU(ws, robotName, attemptId) {
                 }
             }
         });
+
+        const imuNodes = await waitForNodes([
+            `/${robotName}/imu/Sensor`, `/${robotName}/imu/qb_interface_imu_node`,
+            `/${robotName}/alterego_state_publisher`
+        ], 15000);
+        logStartupEvent(attemptId, 'startup.check', {
+            stage: 'imu_nodes', outcome: imuNodes.ready ? 'passed' : 'failed',
+            detail: imuNodes.missing.join(',')
+        });
+        if (!imuNodes.ready) return false;
 
 
         // Check IMU connection
@@ -466,53 +515,43 @@ export async function handleDockingMovement(ws, robotName, direction, maxLinDist
         
 
         // Send docking movement command
-        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.DOCKING} movementDirection:="${direction}" maxLinDistance:=${maxLinDistance}`,
+        const dockingNode = `/${robotName}/wheels/docking`;
+        const accepted = await sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.DOCKING} movementDirection:="${direction}" maxLinDistance:=${maxLinDistance}`,
             { attemptId, stage: `docking_${direction}` });
-        
-        // Add a small delay before showing the progress popup
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (!accepted) return false;
+        const started = await waitForNodes([dockingNode], 10000);
+        logStartupEvent(attemptId, 'startup.check', { stage: `docking_${direction}_node`, outcome: started.ready ? 'started' : 'missing' });
+        if (!started.ready) return false;
 
-        return new Promise((resolve) => {
-            var checkInterval;
-            
-            // Show progress popup with node status checking
-            Swal.fire({
-                title: 'Moving ' + direction + '...',
-                text: 'Please wait',
-                allowOutsideClick: false,
-                allowEscapeKey: false,
-                showConfirmButton: false,
-                didOpen: () => {
-                    Swal.showLoading();
-                    // Start checking node status
-                    checkInterval = setInterval(async () => {
-                        const isNodeActive = await checkNodeStatus(`/${robotName}/wheels/docking`);
-                        if (!isNodeActive) {
-                            clearInterval(checkInterval);
-                            Swal.close();
-                            // Show completion popup
-                            await showSyncedPopup(ws, {
-                                title: 'Complete',
-                                text: direction + ' movement completed',
-                                icon: 'success',
-                                timer: 1500,
-                                showConfirmButton: false
-                            });
-                            resolve(true);
-                        }
-                    }, 2000);
-                },
-                willClose: () => {
-                    // Cleanup interval if popup is closed
-                    if (checkInterval) {
-                        clearInterval(checkInterval);
-                    }
-                }
-            });
+        Swal.fire({
+            title: 'Moving ' + direction + '...', text: 'Please wait',
+            allowOutsideClick: false, allowEscapeKey: false, showConfirmButton: false,
+            didOpen: () => Swal.showLoading()
         });
+        const deadline = Date.now() + 60000;
+        while (Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            if (!await checkNodeStatus(dockingNode)) {
+                Swal.close();
+                await showSyncedPopup(ws, {
+                    title: 'Complete', text: direction + ' movement completed',
+                    icon: 'success', timer: 1500, showConfirmButton: false
+                });
+                return true;
+            }
+        }
+        Swal.close();
+        logStartupEvent(attemptId, 'startup.check', { stage: `docking_${direction}_node`, outcome: 'timeout' });
+        await showSyncedPopup(ws, {
+            title: 'Movement check timed out',
+            text: 'The docking controller is still running. Keep the robot supported and inspect it before retrying.',
+            icon: 'error'
+        });
+        return false;
 
     } catch (error) {
         console.error('Error in ' + direction + ' movement:', error);
+        Swal.close();
         await showSyncedPopup(ws, {
             title: 'Error',
             text: 'Failed to move ' + direction,
@@ -567,14 +606,23 @@ export async function initializeSystem(ws, robotName, attemptId) {
 
         // Start wheels control
         logStartupEvent(attemptId, 'startup.service', { stage: 'wheels', outcome: 'dispatched' });
-        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.WHEELS}`,
+        const wheelsAccepted = await sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.WHEELS}`,
             { attemptId, stage: 'wheels' });
-        await new Promise(r => setTimeout(r, 2000));
+        if (!wheelsAccepted) return false;
+        const wheelsReady = await waitForNodes([
+            `/${robotName}/wheels/qb_interface_node`, `/${robotName}/wheels/lqr`
+        ], 15000);
+        logStartupEvent(attemptId, 'startup.check', {
+            stage: 'wheel_nodes', outcome: wheelsReady.ready ? 'passed' : 'failed',
+            detail: wheelsReady.missing.join(',')
+        });
+        if (!wheelsReady.ready) return false;
         
         // Activate arm motors
         logStartupEvent(attemptId, 'startup.service', { stage: 'body_activation', outcome: 'dispatched' });
-        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BODY_ACTIVATION}`,
+        const bodyAccepted = await sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BODY_ACTIVATION}`,
             { attemptId, stage: 'body_activation' });
+        if (!bodyAccepted) return false;
         await new Promise(r => setTimeout(r, 2000));
 
         console.log("Pre Checking arm motors activation...");
@@ -589,12 +637,13 @@ export async function initializeSystem(ws, robotName, attemptId) {
         
         // Start movement control
         logStartupEvent(attemptId, 'startup.service', { stage: 'body_movement', outcome: 'dispatched' });
-        sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BODY_MOVEMENT}`,
+        const movementAccepted = await sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BODY_MOVEMENT}`,
             { attemptId, stage: 'body_movement' });
+        if (!movementAccepted) return false;
         await new Promise(r => setTimeout(r, 2000));
         
         
-        const movementInitialized = await checkMovementController(ws);
+        const movementInitialized = await checkMovementController(ws, robotName);
         logStartupEvent(attemptId, 'startup.check', { stage: 'movement_timer', outcome: movementInitialized ? 'elapsed' : 'failed' });
         if (!movementInitialized) return false;       
 
@@ -843,6 +892,11 @@ export async function checkMotorsActivation(ws, robotName) {
                     } catch (error) {
                         console.error('Error checking arm movement:', error);
                         checkCount++;
+                        if (checkCount >= MAX_ATTEMPTS) {
+                            clearInterval(checkInterval);
+                            Swal.close();
+                            resolve(false);
+                        }
                     }
                 }, 2000);
 
@@ -860,9 +914,8 @@ export async function checkMotorsActivation(ws, robotName) {
  * @param {WebSocket} ws - WebSocket connection for sync
  * @returns {Promise<boolean>} True if controller is active
  */
-export async function checkMovementController(ws) {
-    return new Promise((resolve) => {
-        showSyncedPopup(ws, {
+export async function checkMovementController(ws, robotName) {
+    await showSyncedPopup(ws, {
             title: 'Activating movement...',
             text: 'Please wait...',
             timer: 5000,
@@ -875,10 +928,19 @@ export async function checkMovementController(ws) {
                     Swal.showLoading();
                 }
             }
-        }).then(() => {
-            resolve(true);
-        });
     });
+    const movementNodes = await waitForNodes([
+        `/${robotName}/left/arm_inv_dyn`, `/${robotName}/right/arm_inv_dyn`,
+        `/${robotName}/head/head_inv_kin`
+    ], 15000);
+    if (!movementNodes.ready) {
+        await showSyncedPopup(ws, {
+            title: 'Movement startup incomplete',
+            text: `Missing ROS nodes: ${movementNodes.missing.join(', ')}`,
+            icon: 'error'
+        });
+    }
+    return movementNodes.ready;
 }
 /**
  * Initializes WebSocket connection for state synchronization

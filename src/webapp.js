@@ -10,7 +10,9 @@ const os = require('os'); // Add os module to get system information
 const { wss } = require('./js/websocket');
 
 const app = express();
-const port = 3000;
+const port = Number(process.env.PORT || 3000);
+const host = process.env.HOST || '0.0.0.0';
+const isolatedTest = process.env.WEBAPP_TEST_MODE === '1';
 // Initialize with a default value
 let NUC_BASE_IP = '192.168.88.110';
 let NUC_VISION_IP = '192.168.88.111';
@@ -24,6 +26,11 @@ console.log(`\nCurrent Username: ${currentUsername} \nRemote Username: ${remoteU
 // Middleware setup
 app.use(bodyParser.json());
 app.use(express.json());
+if (isolatedTest) {
+    app.use(['/execute', '/execute-local', '/grep-command'], (_req, res) => {
+        res.status(503).json({ error: 'Hardware commands disabled in isolated test mode' });
+    });
+}
 
 app.post('/api/startup-log', (req, res) => {
     const { attemptId, event, clientTime, stage, outcome, pipelineState, isPowered, detail } = req.body || {};
@@ -108,8 +115,8 @@ function getNucIPs() {
 }
 // Use the async function properly
 getNucIPs().then(async ips => {
-    NUC_BASE_IP = ips.base;
-    NUC_VISION_IP = ips.vision;
+    NUC_BASE_IP = isolatedTest ? '127.0.0.1' : ips.base;
+    NUC_VISION_IP = isolatedTest ? '127.0.0.1' : ips.vision;
     
     // Get the robot version from .bashrc
     let robotVersion = 2; // Default value
@@ -156,8 +163,8 @@ getNucIPs().then(async ips => {
 
 // Move server startup to a function
 function startServer() {   
-    const server = app.listen(port, '0.0.0.0', () => {
-        console.log(`Server running at http://0.0.0.0:${port}`);
+    const server = app.listen(port, host, () => {
+        console.log(`Server running at http://${host}:${port}`);
     });
     
     // Collegamento WebSocket al server HTTP
@@ -168,42 +175,40 @@ function startServer() {
     });
 }
 
-// SSH setup
-let sshConnected = false;
-const sshClient = new Client();
-
-function connectSSH() {
-    if (sshConnected) return Promise.resolve();
-
+// Fresh SSH client per call: a shared client keeps a stale "connected" flag after a base reboot.
+function runOnBase(command, timeoutMs) {
     return new Promise((resolve, reject) => {
-        const connectionParams = {
+        const params = {
             host: NUC_BASE_IP,
             username: remoteUsername,
-            privateKey: fs.readFileSync(`/home/${currentUsername}/.ssh/id_rsa`)
+            privateKey: fs.readFileSync(`/home/${currentUsername}/.ssh/id_rsa`),
+            readyTimeout: 3000
         };
-
-        sshClient.connect(connectionParams);
-
-        sshClient.on('ready', () => {
-            console.log('Connected via SSH!');
-            sshConnected = true;
-            resolve();
+        const client = new Client();
+        let output = '';
+        let done = false;
+        const timer = setTimeout(() => {
+            const err = new Error(`base command timed out after ${timeoutMs} ms`);
+            err.code = 'ETIMEDOUT';
+            finish(err);
+        }, timeoutMs);
+        function finish(err, out) {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            client.end();
+            if (err) reject(err); else resolve(out);
+        }
+        client.on('ready', () => {
+            client.exec(command, (err, stream) => {
+                if (err) return finish(err);
+                stream.on('data', (data) => { output += data.toString(); });
+                stream.stderr.on('data', () => {});
+                stream.on('close', () => finish(null, output));
+            });
         });
-
-        sshClient.on('error', (err) => {
-            console.error('Error connecting via SSH:', err);
-            sshConnected = false;
-            reject(err);
-        });
-        // sshClient.on('error', (err) => {
-        //     console.error('SSH error:', err);
-        //     sshConnected = false;
-        //     // Prova a riconnetterti
-        //     setTimeout(() => {
-        //     if (!sshConnected) connectSSH();
-        //     }, 5000);
-        // });
-
+        client.on('error', finish);
+        client.connect(params);
     });
 }
 
@@ -232,35 +237,6 @@ app.post('/execute-local', async (req, res) => {
     }
 });
 
-
-function execute(command) {
-    return new Promise((resolve, reject) => {
-        sshClient.exec(command, (err, stream) => {
-            if (err) {
-                reject(err);
-                return;
-            }
-
-            let output = '';
-            let errorOutput = '';
-
-            stream.on('data', (data) => {
-                output += data.toString();
-            });
-
-            stream.stderr.on('data', (data) => {
-                errorOutput += data.toString();
-            });
-
-            stream.on('close', () => {
-                if (errorOutput) {
-                    console.error('Command error:', errorOutput);
-                }
-                resolve(output);
-            });
-        });
-    });
-}
 
 // Routes
 app.get('/', (req, res) => {
@@ -340,14 +316,11 @@ app.post('/execute', async (req, res) => {
 
 app.post('/grep-command', async (req, res) => {
     try {
-        if (!sshConnected) {
-            await connectSSH();
-        }
-        const output = await execute(req.body.command);
+        const output = await runOnBase(req.body.command, 5000);
         res.json({ output });
     } catch (error) {
-        console.error('Grep command error:', error);
-        res.status(500).json({ error: error.message });
+        console.error('Grep command error:', error.message);
+        res.status(error.code === 'ETIMEDOUT' ? 504 : 500).json({ error: error.message });
     }
 });
 
