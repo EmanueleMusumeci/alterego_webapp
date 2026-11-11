@@ -165,13 +165,13 @@ export async function activateRobotProcedures(ws, robotName, attemptId) {
     logStartupEvent(attemptId, 'startup.phase', { stage: 'roscore', outcome: 'dispatched' });
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.ROSCORE}`,
         { attemptId, stage: 'roscore' });
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 5000));  // 2000 -> 5000 ms (2026-11-11: let roscore/IMU/TTS settle)
     logStartupEvent(attemptId, 'startup.phase', { stage: 'usb_detector', outcome: 'dispatched' });
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.USB_DETECTOR}`,
         { attemptId, stage: 'usb_detector' });
     await new Promise(r => setTimeout(r, 2000));
     sendCommand(ROS_COMMANDS.CLEAR_LOG);
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 5000));  // 2000 -> 5000 ms (2026-11-11: let roscore/IMU/TTS settle)
     
     // Initialize IMU
     logStartupEvent(attemptId, 'startup.phase', { stage: 'imu', outcome: 'checking' });
@@ -261,10 +261,10 @@ export async function standUpProcedures(ws, robotName, attemptId) {
 
 export async function reStartAudio(ws, robotName) {
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.TTS}`);
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 5000));  // 2000 -> 5000 ms (2026-11-11: let roscore/IMU/TTS settle)
 
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.STT2}`);
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 5000));  // 2000 -> 5000 ms (2026-11-11: let roscore/IMU/TTS settle)
 
     return true;
 }
@@ -273,12 +273,12 @@ export async function startAudio(ws, robotName, attemptId) {
     if (attemptId) logStartupEvent(attemptId, 'startup.service', { stage: 'tts', outcome: 'dispatched' });
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.TTS}`,
         { attemptId, stage: 'tts' });
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 5000));  // 2000 -> 5000 ms (2026-11-11: let roscore/IMU/TTS settle)
     
     if (attemptId) logStartupEvent(attemptId, 'startup.service', { stage: 'stt', outcome: 'dispatched' });
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.STT2}`,
         { attemptId, stage: 'stt' });
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 5000));  // 2000 -> 5000 ms (2026-11-11: let roscore/IMU/TTS settle)
 
     
     return true;
