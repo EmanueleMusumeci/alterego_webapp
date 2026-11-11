@@ -17,14 +17,16 @@ function updatePipelineState(ws, state, value){
     batteryMonitor.updateFSMState(state.pipelineState);
 }
 
-async function poweroffNUCs(ws) {
+async function poweroffNUCs(ws, attemptId) {
 
     // Power Off BASE NUC
-    sendCommand('echo 111 | sudo -S poweroff', '' );
+    logStartupEvent(attemptId, 'shutdown.phase', { stage: 'poweroff_base', outcome: 'dispatched' });
+    sendCommand('echo 111 | sudo -S poweroff', { attemptId, stage: 'poweroff_base' });
     await new Promise(r => setTimeout(r, 2000));
     
     // Power Off VISION NUC
-    sendLocalCommand(`echo 111 | sudo -S poweroff`, '');
+    logStartupEvent(attemptId, 'shutdown.phase', { stage: 'poweroff_vision', outcome: 'dispatched' });
+    sendLocalCommand(`echo 111 | sudo -S poweroff`, { attemptId, stage: 'poweroff_vision' });
 }
 
 async function startPowerMonitor(ws, state, robotName){
@@ -101,12 +103,13 @@ function stopPowerMonitor(){
 }
 
 // --------------------- PROCEDURES --------------------------------- //
-async function stopRobot(ws) {
+async function stopRobot(ws, attemptId) {
 
     stopPowerMonitor(); // Need max. 1500 ms to close
 
     // Kill everything
-    sendCommand(ROS_COMMANDS.CLEANUP);
+    logStartupEvent(attemptId, 'shutdown.phase', { stage: 'cleanup', outcome: 'dispatched' });
+    sendCommand(ROS_COMMANDS.CLEANUP, { attemptId, stage: 'cleanup' });
 
     // Popup - Wait nodes have been killed
     await showSyncedPopup(ws, {
@@ -369,11 +372,12 @@ export async function goHomeProcedures(ws, robotName) {
 
 // --------------------- STATE CHANGE --------------------------------- //
 
-async function stopRobotToPowerOff(ws, state, do_check = true) {
+async function stopRobotToPowerOff(ws, state, do_check = true, attemptId) {
     
     // Wait for Power Alert Trigger
     if (do_check && batteryMonitor.timerIsSet()){
         const powerIsOff = await waitForPowerAlertTrigger(ws, false);
+        logStartupEvent(attemptId, 'shutdown.check', { stage: 'power_alert', outcome: powerIsOff ? 'passed' : 'failed' });
 
         /*if (!powerIsOff) {
             // Error on trigger or battery timer or ROS not set
@@ -382,7 +386,7 @@ async function stopRobotToPowerOff(ws, state, do_check = true) {
     }
     
     if (state.pipelineState != STATE.RECOVERY_FROM_EMERGENCY){
-        stopRobot(ws);
+        stopRobot(ws, attemptId);
     }
 
     return true;
@@ -427,12 +431,14 @@ export async function robotPowerOnClick(ws, state, robotName, attemptId = newSta
     return true;
 }
 
-export async function robotPowerOffClick(ws, state, do_check = true) {
+export async function robotPowerOffClick(ws, state, do_check = true, attemptId = newStartupAttemptId()) {
 
+    logStartupEvent(attemptId, 'shutdown.begin', { pipelineState: state.pipelineState, doCheck: do_check });
     // Stop Robot to Power Off
     if (do_check) {
-        const stopRobotPowerOff = await stopRobotToPowerOff(ws, state, do_check);
+        const stopRobotPowerOff = await stopRobotToPowerOff(ws, state, do_check, attemptId);
         if (!stopRobotPowerOff) {
+            logStartupEvent(attemptId, 'shutdown.failed', { stage: 'stop_robot' });
             return false;
         }
     }
@@ -441,7 +447,7 @@ export async function robotPowerOffClick(ws, state, do_check = true) {
     updatePipelineState(ws, state, STATE.POWER_OFF_NUCS);
     
     // Power Off the system
-    poweroffNUCs(ws);            // Power Off everything
+    poweroffNUCs(ws, attemptId);            // Power Off everything
 
     // Notify next workflow state (useless, everything is off)
     updatePipelineState(ws, state, STATE.INIT);

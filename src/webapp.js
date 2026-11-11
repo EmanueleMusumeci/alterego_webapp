@@ -209,7 +209,7 @@ function connectSSH() {
 
 function executeLocal(command) {
     return new Promise((resolve, reject) => {
-        exec(`bash -c '${command}'`, (error, stdout, stderr) => {
+        exec(`bash -c '${command}'`, { maxBuffer: 32 * 1024 * 1024 }, (error, stdout, stderr) => {
             if (error) {
                 reject(error);
                 return;

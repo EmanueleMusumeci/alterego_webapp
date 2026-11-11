@@ -3,6 +3,7 @@ import { batteryMonitor } from '../batterymonitor.js';
 import { STATE } from '../constants.js';
 import { updateUI } from '../utils.js';
 import { robotHomeClick, robotPowerOffClick } from '../workflow.js';
+import { logStartupEvent, newStartupAttemptId } from '../startupLog.js';
 /**
  * Gestisce il click sul pulsante Home
  * Avvia il movimento verso la posizione home
@@ -29,10 +30,12 @@ export async function handleSecondButtonClick(ws, state, robotName) {
                 confirmButtonText: 'OK, Power Off'
             });
             
+            const shutdownId = newStartupAttemptId();
+            logStartupEvent(shutdownId, 'shutdown.confirm', { outcome: warnAnsw ? 'accepted' : 'cancelled', pipelineState: state.pipelineState });
             if (!warnAnsw) return;
 
             // Switch Everything Off
-            robotPowerOffClick(ws, state);
+            robotPowerOffClick(ws, state, true, shutdownId);
             state.isPowered = false;
             
             ws.send(JSON.stringify({
