@@ -71,8 +71,8 @@ async function refreshStatus() {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ command: `${ROS_COMMANDS.SETUP} && rosnode list` })
         });
-        const out = r.ok ? ((await r.json()).output || '') : '';
-        nodes = out.includes('Unable to communicate') ? null : new Set(out.split(/\r?\n/).map(s => s.trim()));
+        const out = r.ok ? ((await r.json()).output || '') : null;
+        nodes = out === null || out.includes('Unable to communicate') ? null : new Set(out.split(/\r?\n/).map(s => s.trim()));
     } catch (error) { /* shown as n/a */ }
     const age = batteryMonitor.getReadingAgeMs();
     const fresh = age !== null && age < 10000;
@@ -81,12 +81,12 @@ async function refreshStatus() {
         tile('Battery', age === null ? null : fresh, age === null ? 'no reading' :
             `${batteryMonitor.getBatteryLevel()} % · ${Math.round(age / 1000)} s ago${batteryMonitor.getIsCharging() ? ' · charging' : ''}${batteryMonitor.getIsDocked() ? ' · docked' : ''}`) +
         '</div><div class="sg-group">PCs</div><div class="sg-tiles">' +
-        tile('Base PC', status ? status.base.reachable : null, status && status.base.reachable ? `up ${Math.round(status.base.uptimeS / 60)} min` : '') +
+        tile('Base PC', status ? status.base.reachable : null, status && status.base.reachable ? `up ${Math.round(status.base.uptimeS / 60)} min` : 'not reachable') +
         tile('Vision PC', status ? true : null, status ? `up ${Math.round(status.vision.uptimeS / 60)} min · disk ${status.vision.diskFree} free` : '') +
         '</div><div class="sg-group">Speech servers</div><div class="sg-tiles">' +
         (status ? status.backends.map(b => tile(b.name.toUpperCase(), b.ok, b.ok ? 'answers' : 'no answer')).join('') : tile('Backends', null)) +
         '</div>';
-    html += `<div class="sg-group">ROS ${nodes ? '' : '(master not running)'}</div>`;
+    html += `<div class="sg-group">ROS ${nodes ? '' : '(master not running or base not reachable)'}</div>`;
     for (const [group, names] of NODE_GROUPS) {
         html += `<div class="sg-note">${group}</div><div class="sg-tiles">` + names.map(n => {
             const full = n === '/rosout' ? n : `/${robotName}${n}`;
