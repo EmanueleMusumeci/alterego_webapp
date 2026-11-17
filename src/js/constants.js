@@ -108,9 +108,9 @@ export function updateLaunchCommands() {
     LAUNCH_COMMANDS.FACE_RECOGNITION = 'roslaunch alterego_face_recognition face_recognition.launch';
     // Long launches write to a file: exec() buffers all stdout and kills the child at maxBuffer
     // (17 TTS kills since 1 Nov 2026). No single quotes here: executeLocal wraps in bash -c '...'.
-    const toLaunchLog = (name, cmd) => 'mkdir -p ~/webapp_launch_logs && ' +
-        '(find ~/webapp_launch_logs -name "*.log" -mtime +14 -delete || true) && ' +
-        cmd + ' >> ~/webapp_launch_logs/' + name + '_$(date +%F_%H%M%S).log 2>&1';
+    const toLaunchLog = (name, cmd) => 'mkdir -p ~/.ros/log/webapp_launch && ' +
+        '(find ~/.ros/log/webapp_launch -name "*.log" -mtime +14 -delete || true) && ' +
+        cmd + ' >> ~/.ros/log/webapp_launch/' + name + '_$(date +%F_%H%M%S).log 2>&1';
     LAUNCH_COMMANDS.FACE_TRACKING = toLaunchLog('face_tracking', 'roslaunch alterego_face_tracking face_tracking.launch');
     LAUNCH_COMMANDS.STT = 'roslaunch alterego_conversation speech2text.launch 2>/dev/null';
     LAUNCH_COMMANDS.STT2 = toLaunchLog('stt', 'roslaunch alterego_conversation speech2text_multilang.launch');
