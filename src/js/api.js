@@ -42,14 +42,14 @@ export function sendCommand(command, startup) {
  * @param {string} command - The command to execute
  * @returns {Promise<string>}
  */
-export async function sendLocalCommand(command, startup) {
+export async function sendLocalCommand(command, startup, wait = false) {
     try {
         const response = await fetch('/execute-local', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(commandPayload(command, startup)),
+            body: JSON.stringify(Object.assign(commandPayload(command, startup), wait ? { wait: true } : {})),
         });
         if (!response.ok) {
             throw new Error(`Error in command execution: ${response.status}`);

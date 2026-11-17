@@ -72,7 +72,9 @@ async function refreshStatus() {
             body: JSON.stringify({ command: `${ROS_COMMANDS.SETUP} && rosnode list` })
         });
         const out = r.ok ? ((await r.json()).output || '') : null;
-        nodes = out === null || out.includes('Unable to communicate') ? null : new Set(out.split(/\r?\n/).map(s => s.trim()));
+        // /grep-command returns stdout only: with the master down, rosnode list prints nothing.
+        const listed = out === null ? null : new Set(out.split(/\r?\n/).map(s => s.trim()));
+        nodes = listed && listed.has('/rosout') ? listed : null;
     } catch (error) { /* shown as n/a */ }
     const age = batteryMonitor.getReadingAgeMs();
     const fresh = age !== null && age < 10000;

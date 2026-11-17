@@ -190,7 +190,7 @@ function handleVolumeChange (e) {
 async function getInitialVolume() {
     try {
         const command = "pactl list sinks | grep \"Volume:\" | head -n 1";
-        const volumeString = await sendLocalCommand(command);  
+        const volumeString = await sendLocalCommand(command, undefined, true);  // needs the output
         // Extract the percentage value (e.g. 75%)
         let pactlVolume = parseInt(volumeString.output.split('%')[0].split('/').pop().trim());
         // Limits to 150 and map on the slider

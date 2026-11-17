@@ -263,6 +263,16 @@ function executeLocal(command) {
 
 app.post('/execute-local', async (req, res) => {
     logStartupCommand(req, 'command.local', 'requested');
+    // Launches run for hours: answer at once and log the exit later, like /execute. A request kept
+    // open blocks one of the browser's 6 connections to this server and is closed by Node after
+    // 120 s, after which a browser may resend it (a second launch). wait:true returns the output.
+    if (!req.body.wait) {
+        executeLocal(req.body.command)
+            .then(() => logStartupCommand(req, 'command.local', 'completed'))
+            .catch(error => logStartupCommand(req, 'command.local', 'failed', error.code || error.signal || 'unknown'));
+        logStartupCommand(req, 'command.local', 'accepted');
+        return res.json({ success: true });
+    }
     try {
         const output = await executeLocal(req.body.command);
         logStartupCommand(req, 'command.local', 'completed');
