@@ -252,7 +252,6 @@ app.post('/execute', async (req, res) => {
         username: remoteUsername,
         privateKey: fs.readFileSync(`/home/${currentUsername}/.ssh/id_rsa`)
     };
-    let output = '';
     let errorOutput = '';
 
     try {
@@ -266,17 +265,17 @@ app.post('/execute', async (req, res) => {
                     return;
                 }
 
-                stream.on('data', (data) => {
-                    output += data.toString();
-                });
-
+                // Drain stdout without keeping it (long launches print for hours); keep a 4 KB stderr tail.
+                stream.resume();
                 stream.stderr.on('data', (data) => {
-                    errorOutput += data.toString();
+                    errorOutput = (errorOutput + data.toString()).slice(-4096);
                 });
 
                 stream.on('close', (code, signal) => {
+                    client.end();
                     logStartupCommand(req, 'command.remote', code === 0 ? 'completed' : 'failed',
                         `exit=${code} signal=${signal}`);
+                    if (errorOutput) console.error('Remote command stderr (tail):', errorOutput);
                 });
 
                 /*stream.on('close', () => {
@@ -300,7 +299,7 @@ app.post('/execute', async (req, res) => {
             console.error('SSH connection error:', err);
             if (err.code === 'ECONNRESET') {
                 console.log('ECONNRESET noticed...');  // Allow to move on turn off other NUC
-                res.json({ success: true, output });
+                res.json({ success: true });
             } else {
                 res.status(500).json({ success: false, error: err.message });
             }            
@@ -325,7 +324,7 @@ app.post('/grep-command', async (req, res) => {
 });
 
 app.post('/send-videocommand', (req, res) => {
-    exec(req.body.command, (error, stdout, stderr) => {
+    exec(req.body.command, { maxBuffer: 32 * 1024 * 1024 }, (error, stdout, stderr) => {
         if (error) {
             console.error('Video command error:', error);
             res.status(500).json({ success: false, error: error.message });

@@ -87,6 +87,36 @@ async function testOptionalNodesDoNotAbort() {
     }
 }
 
+async function testLaunchOutputGoesToFile() {
+    const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+    const { execSync } = require('node:child_process');
+    const c = await loadModule('constants.js', {}, { fetch: async () => ({ ok: false }) });
+    c.updateLaunchCommands();
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'launchlog-'));
+    fs.mkdirSync(path.join(home, 'bin'));
+    fs.writeFileSync(path.join(home, 'bin', 'roslaunch'), '#!/bin/sh\necho out-$2; echo err-$2 >&2\n', { mode: 0o755 });
+    fs.mkdirSync(path.join(home, 'webapp_launch_logs'));
+    const old = path.join(home, 'webapp_launch_logs', 'tts_old.log');
+    fs.writeFileSync(old, 'x');
+    fs.utimesSync(old, new Date(Date.now() - 20 * 86400e3), new Date(Date.now() - 20 * 86400e3));
+    for (const [key, name] of [['TTS', 'tts'], ['STT2', 'stt'], ['FACE_TRACKING', 'face_tracking']]) {
+        const cmd = c.LAUNCH_COMMANDS[key];
+        assert.ok(!cmd.includes("'"), `${key} must not contain single quotes (bash -c '...')`);
+        assert.match(cmd, new RegExp(` >> ~/webapp_launch_logs/${name}_\\$\\(date \\+%F_%H%M%S\\)\\.log 2>&1$`));
+        // Same wrapper as executeLocal in src/webapp.js.
+        const stdout = execSync(`bash -c '${cmd}'`, { env: { ...process.env, HOME: home, PATH: `${home}/bin:${process.env.PATH}` } });
+        assert.equal(stdout.toString(), '', `${key} stdout must not reach exec()`);
+    }
+    const logs = fs.readdirSync(path.join(home, 'webapp_launch_logs'));
+    assert.ok(!logs.includes('tts_old.log'), 'logs older than 14 days are pruned');
+    for (const name of ['tts', 'stt', 'face_tracking']) {
+        const f = logs.find(l => new RegExp(`^${name}_\\d{4}-\\d\\d-\\d\\d_\\d{6}\\.log$`).test(l));
+        assert.ok(f, `log file for ${name}`);
+        assert.match(fs.readFileSync(path.join(home, 'webapp_launch_logs', f), 'utf8'), /out-.*\nerr-/s);
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+}
+
 // A hung await leaves the event loop empty and node exits 0: fail unless the end is reached.
 process.exitCode = 1;
 (async () => {
@@ -95,6 +125,7 @@ process.exitCode = 1;
     await testStillMissingBlocksWorkMode();
     await testResumeStaysPaused();
     await testOptionalNodesDoNotAbort();
+    await testLaunchOutputGoesToFile();
     console.log('startup fixes tests passed');
     process.exitCode = 0;
 })().catch(error => { console.error(error); process.exitCode = 1; });

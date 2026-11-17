@@ -106,10 +106,15 @@ export function updateLaunchCommands() {
     
     // Questi comandi non hanno bisogno del parametro AlterEgoVersion
     LAUNCH_COMMANDS.FACE_RECOGNITION = 'roslaunch alterego_face_recognition face_recognition.launch';
-    LAUNCH_COMMANDS.FACE_TRACKING = 'roslaunch alterego_face_tracking face_tracking.launch';
+    // Long launches write to a file: exec() buffers all stdout and kills the child at maxBuffer
+    // (17 TTS kills since 1 Nov 2026). No single quotes here: executeLocal wraps in bash -c '...'.
+    const toLaunchLog = (name, cmd) => 'mkdir -p ~/webapp_launch_logs && ' +
+        '(find ~/webapp_launch_logs -name "*.log" -mtime +14 -delete || true) && ' +
+        cmd + ' >> ~/webapp_launch_logs/' + name + '_$(date +%F_%H%M%S).log 2>&1';
+    LAUNCH_COMMANDS.FACE_TRACKING = toLaunchLog('face_tracking', 'roslaunch alterego_face_tracking face_tracking.launch');
     LAUNCH_COMMANDS.STT = 'roslaunch alterego_conversation speech2text.launch 2>/dev/null';
-    LAUNCH_COMMANDS.STT2 = 'roslaunch alterego_conversation speech2text_multilang.launch 2>/dev/null';
-    LAUNCH_COMMANDS.TTS = 'roslaunch alterego_text2speech text2speech_prefetch.launch';
+    LAUNCH_COMMANDS.STT2 = toLaunchLog('stt', 'roslaunch alterego_conversation speech2text_multilang.launch');
+    LAUNCH_COMMANDS.TTS = toLaunchLog('tts', 'roslaunch alterego_text2speech text2speech_prefetch.launch');
     LAUNCH_COMMANDS.SET_VOLUME_FIX = '/home/alterego-vision/AlterEGO_Adriano/set_volume_at_startup.sh';
     LAUNCH_COMMANDS.KILL_SPEECH = './home/alterego-vision/kill_speech.sh; /home/alterego-vision/kill_speech.sh; rosnode kill /robot_adriano/speech2text /robot_adriano/text2speech';
     LAUNCH_COMMANDS.NAVIGATION = 'roslaunch alterego_navigation autonomous_nav.launch';
