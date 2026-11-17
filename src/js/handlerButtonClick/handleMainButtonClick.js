@@ -73,7 +73,8 @@ export async function handleMainButtonClick(ws, state, robotName) {
 
         if (state.pipelineState == STATE.INIT ||
             state.pipelineState == STATE.DOCKED ||
-            state.pipelineState == STATE.RECOVERY_FROM_EMERGENCY){
+            state.pipelineState == STATE.RECOVERY_FROM_EMERGENCY ||
+            state.startFailed){
             handled = true;
             
             // First popup - Global warning

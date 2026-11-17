@@ -206,6 +206,46 @@ async function testLowBatteryShutdownLogged() {
     assert.equal(begin && begin.id, auto.id, 'power-off uses the same attemptId');
 }
 
+async function testRetryAfterFailedStart() {
+    const present = new Set([TTS, '/rosout', `/${R}/move_base`, `/${R}/navigation`]);  // STT missing
+    const { wf, log } = await loadWorkflow({ present });
+    const state = { pipelineState: 0, isPowered: true };
+    const ws = { send() {} };
+    assert.equal(await wf.robotPowerOnClick(ws, state, R, 'a'), false);
+    assert.equal(state.startFailed, 'stand_up');
+    assert.equal(state.pipelineState, 2);
+    const before = log.events.filter(e => e.event === 'startup.state' && e.stage === 'activate_robot').length;
+    present.add(STT);
+    assert.equal(await wf.robotPowerOnClick(ws, state, R, 'b'), true);
+    assert.equal(state.pipelineState, 3);
+    assert.equal(state.startFailed, false);
+    const after = log.events.filter(e => e.event === 'startup.state' && e.stage === 'activate_robot').length;
+    assert.equal(after, before, 'retry after a failed stand-up skips activation (no second backward move)');
+
+    // A stale flag in INIT (e.g. after a reboot) means a full start.
+    const s2 = { pipelineState: 0, startFailed: 'stand_up' };
+    await wf.robotPowerOnClick(ws, s2, R, 'c');
+    assert.equal(log.events.filter(e => e.event === 'startup.state' && e.stage === 'activate_robot').length, after + 1);
+
+    // Touch screen: Retry and Power Off enabled after a failed start, disabled while starting.
+    const els = {};
+    const el = () => ({ disabled: null, style: {}, textContent: '', innerHTML: '', classList: { add() {}, remove() {} } });
+    const document = { getElementById: id => (els[id] = els[id] || el()), querySelector: q => (els[q] = els[q] || el()) };
+    const utils = await loadModule('utils.js', {
+        './api.js': { sendLocalCommand() {} },
+        './batterymonitor.js': { batteryMonitor: { getPowerAlert: () => false } },
+        './constants.js': { STATE: { INIT: 0, ACTIVATE_ROBOT: 1, STAND_UP: 2, WORK_MODE: 3 },
+            UI_STATES: { POWER_ON: {}, POWER_OFF: {}, SYSTEM_RUNNING: {}, SYSTEM_READY: {} } }
+    }, { document, localStorage: {} });
+    utils.updateUI({ pipelineState: 2, startFailed: false });
+    assert.equal(els.mainBtn.disabled, true);
+    assert.equal(els.secondBtn.disabled, true);
+    utils.updateUI({ pipelineState: 2, startFailed: 'stand_up' });
+    assert.equal(els.mainBtn.disabled, false);
+    assert.equal(els.secondBtn.disabled, false);
+    assert.match(els.mainBtn.innerHTML, /Retry/);
+}
+
 // A hung await leaves the event loop empty and node exits 0: fail unless the end is reached.
 process.exitCode = 1;
 (async () => {
@@ -218,6 +258,7 @@ process.exitCode = 1;
     await testStartWaitsForBase();
     await testBatteryAge();
     await testLowBatteryShutdownLogged();
+    await testRetryAfterFailedStart();
     console.log('startup fixes tests passed');
     process.exitCode = 0;
 })().catch(error => { console.error(error); process.exitCode = 1; });

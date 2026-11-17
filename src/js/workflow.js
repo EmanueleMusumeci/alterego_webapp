@@ -448,16 +448,29 @@ async function stopRobotToPowerOff(ws, state, do_check = true, attemptId) {
     return true;
 }
 
+// After a failed start the touch screen offers Retry and Power Off (no keyboard, no reload).
+// The value is the failed stage: a retry after a failed stand-up skips activation and its backward move.
+function setStartFailed(ws, state, stage) {
+    state.startFailed = stage;
+    ws.send(JSON.stringify({ type: 'stateUpdate', data: { startFailed: stage } }));
+}
+
 export async function robotPowerOnClick(ws, state, robotName, attemptId = newStartupAttemptId()) {
 
-    logStartupEvent(attemptId, 'startup.begin', { pipelineState: state.pipelineState, isPowered: state.isPowered });
+    // Only straight after a failed stand-up (state persists across reloads; INIT means a full start).
+    const retryStandUp = state.startFailed === 'stand_up' && state.pipelineState == STATE.STAND_UP;
+    logStartupEvent(attemptId, 'startup.begin', { pipelineState: state.pipelineState, isPowered: state.isPowered,
+        detail: retryStandUp ? 'retry_from=stand_up' : '' });
+    setStartFailed(ws, state, false);
     robotName = await getRobotName();   // Doubled to be sure
 
     showLoading(true);
     try {
-    // Initialize Timer to monitor power issues and battery level
+    // Initialize Timer to monitor power issues and battery level (once, also on a retry)
+    stopPowerMonitor();
     startPowerMonitor(ws, state, robotName);
 
+    if (!retryStandUp) {
     // Notify next workflow state
     updatePipelineState(ws, state, STATE.ACTIVATE_ROBOT);
     logStartupEvent(attemptId, 'startup.state', { stage: 'activate_robot', pipelineState: state.pipelineState });
@@ -465,7 +478,9 @@ export async function robotPowerOnClick(ws, state, robotName, attemptId = newSta
     // Activate Robot Core nodes and moves backward
     if (!(await activateRobotProcedures(ws, robotName, attemptId))){
         logStartupEvent(attemptId, 'startup.failed', { stage: 'activate_robot', pipelineState: state.pipelineState });
+        setStartFailed(ws, state, 'activate_robot');
         return false;
+    }
     }
     
     // Notify next workflow state
@@ -475,6 +490,7 @@ export async function robotPowerOnClick(ws, state, robotName, attemptId = newSta
     // Activate all the rest of nodes 
     if (!(await standUpProcedures(ws, robotName, attemptId))){
         logStartupEvent(attemptId, 'startup.failed', { stage: 'stand_up', pipelineState: state.pipelineState });
+        setStartFailed(ws, state, 'stand_up');
         return false;
     }         
     
@@ -491,6 +507,7 @@ export async function robotPowerOnClick(ws, state, robotName, attemptId = newSta
 export async function robotPowerOffClick(ws, state, do_check = true, attemptId = newStartupAttemptId()) {
 
     logStartupEvent(attemptId, 'shutdown.begin', { pipelineState: state.pipelineState, doCheck: do_check });
+    if (state.startFailed) setStartFailed(ws, state, false);
     // Stop Robot to Power Off
     if (do_check) {
         const stopRobotPowerOff = await stopRobotToPowerOff(ws, state, do_check, attemptId);

@@ -47,13 +47,15 @@ export function updateUI(state) {
             updateMainBtn('start_robot');
             updateSecondBtn('power_off');
             break;
-        case STATE.ACTIVATE_ROBOT:    
-            mainBtn.disabled = true;  
-            secondBtn.disabled = true;      
-            break;
+        case STATE.ACTIVATE_ROBOT:
         case STATE.STAND_UP:
-            mainBtn.disabled = true;
-            secondBtn.disabled = true;        
+            // Disabled while starting; Retry and Power Off after a failed start.
+            mainBtn.disabled = !state.startFailed;
+            secondBtn.disabled = !state.startFailed;
+            if (state.startFailed) {
+                mainBtn.innerHTML = '<i class="fas fa-rotate-right"></i><span>Retry</span>';
+                updateSecondBtn('power_off');
+            }
             break;
         case STATE.WORK_MODE:
             mainBtn.disabled = false;
