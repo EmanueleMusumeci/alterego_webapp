@@ -5,8 +5,17 @@ const R = 'robot_adriano';
 const TTS = `/${R}/text2speech`, STT = `/${R}/speech2text`;
 
 // Fake ROS graph: `present` holds running nodes; relaunching a launch may add its node.
-async function loadWorkflow({ present, onLaunch = () => {} }) {
-    const log = { launches: [], events: [], popups: [] };
+// Any other command name (also nested, e.g. STOP_PILOT.R_CTRL) reads as its own path.
+function anyCommand(name, known = {}) {
+    return new Proxy(known, { get: (t, k) => k === Symbol.toPrimitive ? () => name
+        : (k in t ? t[k] : anyCommand(`${name}.${String(k)}`)) });
+}
+
+const EVENT_RE = /^([a-z]+\.)?[a-z_]{2,40}$/;  // server whitelist in src/webapp.js
+
+async function loadWorkflow({ present, onLaunch = () => {}, battery = {} }) {
+    const log = { launches: [], events: [], popups: [], order: [] };
+    let ids = 0;
     const waitForNodes = async (nodes) => {
         const missing = nodes.filter(n => !present.has(n));
         return { ready: missing.length === 0, missing };
@@ -15,7 +24,7 @@ async function loadWorkflow({ present, onLaunch = () => {} }) {
     const wf = await loadModule('workflow.js', {
         './api.js': {
             sendCommand: async () => true,
-            sendLocalCommand: (cmd) => { log.launches.push(cmd); onLaunch(cmd); return never; },
+            sendLocalCommand: (cmd) => { log.launches.push(cmd); log.order.push(cmd); onLaunch(cmd); return never; },
             getRobotName: async () => R, initializeIMU: async () => true,
             handleDockingMovement: async () => true, initializeSystem: async () => true,
             waitForPowerAlertTrigger: async () => true,
@@ -25,17 +34,23 @@ async function loadWorkflow({ present, onLaunch = () => {} }) {
         },
         './batterymonitor.js': { batteryMonitor: {
             updateFSMState() {}, timerIsSet: () => false, getState: () => 0,
-            checkNeedChargeTrigger: () => false, getNeedCharge: () => false, getPowerAlert: () => true
+            checkNeedChargeTrigger: () => false, getNeedCharge: () => false, getPowerAlert: () => true,
+            getBatteryLevel: () => 50, getReadingAgeMs: () => null, getIsCharging: () => false, getIsDocked: () => false,
+            ...battery
         } },
         './constants.js': {
             ROS_COMMANDS: { SETUP: 'base', SETUP_LOCAL: 'local', CLEAR_LOG: 'clear' },
-            LAUNCH_COMMANDS: { TTS: 'launch_tts', STT2: 'launch_stt', FACE_TRACKING: 'launch_face', BREATH: 'launch_breath' },
+            LAUNCH_COMMANDS: anyCommand('', { TTS: 'launch_tts', STT2: 'launch_stt', FACE_TRACKING: 'launch_face',
+                BREATH: 'launch_breath', SAY_TIRED: 'launch_say_tired' }),
             STATE: { INIT: 0, ACTIVATE_ROBOT: 1, STAND_UP: 2, WORK_MODE: 3, PAUSED: 4 }
         },
         './utils.js': { showLoading() {}, updateUI() {} },
         './startupLog.js': {
-            logStartupEvent: (_id, event, f) => log.events.push({ event, ...f }),
-            newStartupAttemptId: () => 'test-attempt'
+            logStartupEvent: (id, event, f) => {
+                assert.match(event, EVENT_RE, `event name ${event} must pass the server whitelist`);
+                log.events.push({ id, event, ...f }); log.order.push(event);
+            },
+            newStartupAttemptId: () => `attempt-${++ids}`
         }
     }, {
         // Collapse the owner's fixed sleeps so tests run fast.
@@ -168,6 +183,29 @@ async function testStartWaitsForBase() {
     assert.equal(state.baseReady, false);
 }
 
+async function testBatteryAge() {
+    const { BatteryMonitor } = await loadModule('batterymonitor.js', {});
+    const m = new BatteryMonitor();
+    assert.equal(m.getReadingAgeMs(), null);
+    m.updateState(false, false, true, true, 17);
+    assert.equal(typeof m.lastUpdateMs, 'number');
+    assert.ok(m.getReadingAgeMs() >= 0 && m.getReadingAgeMs() < 1000);
+}
+
+async function testLowBatteryShutdownLogged() {
+    const { wf, log } = await loadWorkflow({ present: new Set(),
+        battery: { getBatteryLevel: () => 12, getReadingAgeMs: () => 800, getIsDocked: () => true } });
+    assert.equal(await wf.dockingProcedures({ send() {} }, { pipelineState: 3 }, 0.0, R), true);
+    await new Promise(r => setTimeout(r, 50));  // robotPowerOffClick is not awaited
+    const auto = log.events.find(e => e.event === 'shutdown.auto');
+    assert.ok(auto, 'shutdown.auto logged');
+    assert.match(auto.detail, /^reason=low_battery_docked level=12 age_ms=800 /);
+    assert.ok(auto.detail.length <= 160);
+    assert.ok(log.order.indexOf('shutdown.auto') < log.order.findIndex(c => /launch_say_tired$/.test(c)), 'logged before SAY_TIRED');
+    const begin = log.events.find(e => e.event === 'shutdown.begin');
+    assert.equal(begin && begin.id, auto.id, 'power-off uses the same attemptId');
+}
+
 // A hung await leaves the event loop empty and node exits 0: fail unless the end is reached.
 process.exitCode = 1;
 (async () => {
@@ -178,6 +216,8 @@ process.exitCode = 1;
     await testOptionalNodesDoNotAbort();
     await testLaunchOutputGoesToFile();
     await testStartWaitsForBase();
+    await testBatteryAge();
+    await testLowBatteryShutdownLogged();
     console.log('startup fixes tests passed');
     process.exitCode = 0;
 })().catch(error => { console.error(error); process.exitCode = 1; });

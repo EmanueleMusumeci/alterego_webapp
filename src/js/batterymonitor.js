@@ -16,6 +16,7 @@ export class BatteryMonitor {
         this.isDocked = false;
         this.needCharge = false;
         this.batteryLevel = 0;
+        this.lastUpdateMs = null;  // time of the last battery reading
 
         this.oldPowerAlertTrigger = -1;
         this.isSetOldPowerAlertTrigger = false;
@@ -110,6 +111,7 @@ export class BatteryMonitor {
     }
 
     updateState(pA, iC, iD, nC, bL){
+        this.lastUpdateMs = Date.now();
 
         if (!this.isTimerSet){
             // It's first message, update oldPowerAlert
@@ -175,6 +177,11 @@ export class BatteryMonitor {
 
     getBatteryLevel(){
         return this.batteryLevel;
+    }
+
+    // Age of the last reading in ms; null before the first reading.
+    getReadingAgeMs(){
+        return this.lastUpdateMs === null ? null : Date.now() - this.lastUpdateMs;
     }
 }
 

@@ -6,6 +6,12 @@ import { logStartupEvent, newStartupAttemptId } from './startupLog.js';
 
 var batteryInterval;
 
+// Battery facts for shutdown logs (11 Nov: two automatic power-offs with no level recorded).
+function batteryDetail() {
+    return `level=${batteryMonitor.getBatteryLevel()} age_ms=${batteryMonitor.getReadingAgeMs()} ` +
+        `charging=${batteryMonitor.getIsCharging()} docked=${batteryMonitor.getIsDocked()}`;
+}
+
 function updatePipelineState(ws, state, value){
     state.pipelineState = value;
             
@@ -42,6 +48,9 @@ async function startPowerMonitor(ws, state, robotName){
                 //console.log("FSM PIPELINE STATE: " + fsmState);
                 
                 if (batteryMonitor.checkNeedChargeTrigger()) {
+                    logStartupEvent(newStartupAttemptId(), 'battery.need_charge', {
+                        pipelineState: fsmState, detail: `need=${batteryMonitor.getNeedCharge()} ${batteryDetail()}`
+                    });
                     // Detect and handle change in power alert 
                     if (fsmState == STATE.WORK_MODE && batteryMonitor.getNeedCharge()){
                         // Triggered when need_for_charge = true
@@ -594,9 +603,11 @@ export async function dockingProcedures(ws, state, maxLinDistance, robotName) {
     if (maxLinDistance == 0.0){
         //while (!batteryMonitor.getIsCharging()){
             if (batteryMonitor.getBatteryLevel() < 20) {
+                const attemptId = newStartupAttemptId();
+                logStartupEvent(attemptId, 'shutdown.auto', { detail: `reason=low_battery_docked ${batteryDetail()}` });
                 sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.SAY_TIRED}`);
                 await new Promise(r => setTimeout(r, 15000));
-                robotPowerOffClick(ws, state, false);
+                robotPowerOffClick(ws, state, false, attemptId);
             }   
             //await new Promise(r => setTimeout(r, 60000));   // 1 minute
         //}
