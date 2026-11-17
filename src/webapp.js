@@ -297,6 +297,7 @@ app.post('/execute', async (req, res) => {
         client.on('error', (err) => {
             logStartupCommand(req, 'command.remote', 'failed', err.code || 'connection');
             console.error('SSH connection error:', err);
+            if (res.headersSent) return;  // already answered "accepted"; a second res.json would throw
             if (err.code === 'ECONNRESET') {
                 console.log('ECONNRESET noticed...');  // Allow to move on turn off other NUC
                 res.json({ success: true });

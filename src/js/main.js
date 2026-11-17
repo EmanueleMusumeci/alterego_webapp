@@ -32,6 +32,10 @@ let robotName;
  * Inizializza la connessione WebSocket
  * Gestisce gli aggiornamenti di stato e la riconnessione automatica
  */
+// Resolves on the first server state: initApp reads pipelineState (RESTART_AUTO) only after it.
+let resolveFirstState;
+const firstState = new Promise(resolve => { resolveFirstState = resolve; });
+
 function initWebSocket() {
     ws = new WebSocket(`ws://localhost:3000`);
     ws.onopen = () => {
@@ -51,6 +55,7 @@ function initWebSocket() {
             
             // Aggiorna l'interfaccia utente
             updateUI(state);
+            resolveFirstState();
             
             // Gestione sincronizzata dei popup
             if (!state.uiState.activePopup && Swal.isVisible()) {
@@ -121,6 +126,9 @@ async function initApp() {
         el.classList.add('loaded');
     });
     
+    // Wait for the server state (max 5 s), or a reload after charging never sees RESTART_AUTO.
+    await Promise.race([firstState, new Promise(r => setTimeout(r, 5000))]);
+
     if (state.pipelineState == STATE.RESTART_AUTO){
         restartAuto(ws, state, robotName);
 

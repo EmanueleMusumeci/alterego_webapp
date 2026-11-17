@@ -161,7 +161,8 @@ export async function waitForNodes(nodeNames, timeoutMs = 15000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
         const controller = new AbortController();
-        const requestTimer = setTimeout(() => controller.abort(), Math.min(3000, deadline - Date.now()));
+        // Above the server's 5 s /grep-command limit: a busy base must not abort every poll.
+        const requestTimer = setTimeout(() => controller.abort(), 6000);
         try {
             const response = await fetch('/grep-command', {
                 method: 'POST',
@@ -529,8 +530,9 @@ export async function handleDockingMovement(ws, robotName, direction, maxLinDist
             { attemptId, stage: `docking_${direction}` });
         if (!accepted) return false;
         const started = await waitForNodes([dockingNode], 10000);
-        logStartupEvent(attemptId, 'startup.check', { stage: `docking_${direction}_node`, outcome: started.ready ? 'started' : 'missing' });
-        if (!started.ready) return false;
+        logStartupEvent(attemptId, 'startup.check', { stage: `docking_${direction}_node`, outcome: started.ready ? 'started' : 'not_seen' });
+        // ponytail: a short move can end between two polls; as before this branch, not seen = done.
+        if (!started.ready) return true;
 
         Swal.fire({
             title: 'Moving ' + direction + '...', text: 'Please wait',
