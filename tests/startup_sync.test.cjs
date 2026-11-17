@@ -1,27 +1,6 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
 
-const root = path.resolve(__dirname, '..', 'src', 'js');
-
-async function loadModule(filename, exportsByImport, globals = {}) {
-    const context = vm.createContext({
-        console, setTimeout, clearTimeout, AbortController, Promise, Date, JSON,
-        ...globals
-    });
-    const source = fs.readFileSync(path.join(root, filename), 'utf8');
-    const module = new vm.SourceTextModule(source, { context, identifier: filename });
-    await module.link(async specifier => {
-        const values = exportsByImport[specifier];
-        assert.ok(values, `Unexpected import ${specifier}`);
-        return new vm.SyntheticModule(Object.keys(values), function () {
-            for (const [name, value] of Object.entries(values)) this.setExport(name, value);
-        }, { context });
-    });
-    await module.evaluate();
-    return module.namespace;
-}
+const { loadModule } = require('./vm_loader.cjs');
 
 async function testNodeReadiness() {
     let output = '/rosout\n';
@@ -82,8 +61,11 @@ async function testStartStaysBusy() {
     assert.equal(updates, 1, 'UI refresh happens after startup settles');
 }
 
+// A hung await leaves the event loop empty and node exits 0: fail unless the end is reached.
+process.exitCode = 1;
 (async () => {
     await testNodeReadiness();
     await testStartStaysBusy();
     console.log('startup synchronization tests passed');
+    process.exitCode = 0;
 })().catch(error => { console.error(error); process.exitCode = 1; });

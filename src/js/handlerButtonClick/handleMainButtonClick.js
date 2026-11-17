@@ -58,8 +58,7 @@ export async function handleMainButtonClick(ws, state, robotName) {
             }
             else {
                 // Clicked to Play
-                restartFromPauseProcedures(ws, state, robotName);
-                state.isRunning = true;
+                state.isRunning = await restartFromPauseProcedures(ws, state, robotName);
             }                    
             
             // Notify new state

@@ -210,6 +210,37 @@ export async function activateRobotProcedures(ws, robotName, attemptId) {
     return true;
 }
 
+// Face tracking and breath are not required for WORK_MODE: log a miss, do not abort.
+async function checkOptionalNode(attemptId, stage, node) {
+    const check = await waitForNodes([node], 15000);
+    logStartupEvent(attemptId, 'startup.check', { stage, outcome: check.ready ? 'passed' : 'failed', detail: node });
+}
+
+const SPEECH_SERVICES = [
+    { stage: 'tts', node: 'text2speech', launch: 'TTS' },
+    { stage: 'stt', node: 'speech2text', launch: 'STT2' }
+];
+
+// Wait for TTS and STT; relaunch only the missing ones once. Launches are not awaited:
+// /execute-local answers only when roslaunch exits.
+export async function ensureSpeechReady(robotName, attemptId) {
+    const nodeOf = s => `/${robotName}/${s.node}`;
+    const nodes = SPEECH_SERVICES.map(nodeOf);
+    let check = await waitForNodes(nodes, 30000);
+    if (!check.ready) {
+        for (const s of SPEECH_SERVICES.filter(s => check.missing.includes(nodeOf(s)))) {
+            logStartupEvent(attemptId, 'startup.service', { stage: s.stage, outcome: 'relaunched' });
+            sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS[s.launch]}`,
+                { attemptId, stage: s.stage });
+        }
+        check = await waitForNodes(nodes, 30000);
+    }
+    logStartupEvent(attemptId, 'startup.check', {
+        stage: 'speech', outcome: check.ready ? 'passed' : 'failed', detail: check.missing.join(',')
+    });
+    return check.ready;
+}
+
 export async function standUpProcedures(ws, robotName, attemptId) {
 
     // Initialize system (activates wheels and arms (activation e movement))
@@ -236,7 +267,7 @@ export async function standUpProcedures(ws, robotName, attemptId) {
     logStartupEvent(attemptId, 'startup.service', { stage: 'face_tracking', outcome: 'dispatched' });
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_TRACKING}`,
         { attemptId, stage: 'face_tracking' });
-    await new Promise(r => setTimeout(r, 2000));
+    await checkOptionalNode(attemptId, 'face_tracking', `/${robotName}/face_tracker`);
 
     // Start Audio Services
     await startAudio(ws, robotName, attemptId);
@@ -245,7 +276,10 @@ export async function standUpProcedures(ws, robotName, attemptId) {
     logStartupEvent(attemptId, 'startup.service', { stage: 'breath', outcome: 'dispatched' });
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BREATH}`,
         { attemptId, stage: 'breath' });
-    await new Promise(r => setTimeout(r, 2000));
+    await checkOptionalNode(attemptId, 'breath', `/${robotName}/rosbag_play`);
+
+    // STT and TTS must be up before WORK_MODE (11 Nov: WORK_MODE was reported with STT dead).
+    if (!(await ensureSpeechReady(robotName, attemptId))) return false;
 
     // Start Navigation
     logStartupEvent(attemptId, 'startup.service', { stage: 'navigation', outcome: 'dispatched' });
@@ -484,25 +518,37 @@ export async function robotHomeClick(ws, state, robotName) {
 }
 
 export async function restartFromPauseProcedures(ws, state, robotName) {
-
+    const attemptId = newStartupAttemptId();
+    logStartupEvent(attemptId, 'resume.begin', { pipelineState: state.pipelineState });
     showLoading(true);
-
+    try {
     // Start FACE TRACKING
-    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_TRACKING}`);    
-    await new Promise(r => setTimeout(r, 2000));
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_TRACKING}`);
+    await checkOptionalNode(attemptId, 'face_tracking', `/${robotName}/face_tracker`);
 
     // Start Audio Services
-    reStartAudio(ws, robotName);
+    await reStartAudio(ws, robotName);
 
     // Start Breath Rosbag
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BREATH}`);
 
+    if (!(await ensureSpeechReady(robotName, attemptId))) {
+        logStartupEvent(attemptId, 'resume.failed', { stage: 'speech', pipelineState: state.pipelineState });
+        showSyncedPopup(ws, {
+            title: 'Speech not ready',
+            text: 'Speech recognition or speech synthesis did not start. The robot stays paused.',
+            icon: 'error'
+        });
+        return false;
+    }
+
     // Notify next workflow state
     updatePipelineState(ws, state, STATE.WORK_MODE);
-
-    showLoading(false);
-
+    logStartupEvent(attemptId, 'resume.complete', { pipelineState: state.pipelineState });
     return true;
+    } finally {
+        showLoading(false);
+    }
 }
 
 export async function pauseProcedures(ws, state, robotName) {
