@@ -313,6 +313,16 @@ app.post('/execute', async (req, res) => {
     }
 });
 
+// Start stays disabled until this answers true: a ping does not prove SSH works (base reboots).
+app.get('/api/base-ready', async (_req, res) => {
+    try {
+        await runOnBase('true', 3000);
+        res.json({ ready: true });
+    } catch (error) {
+        res.json({ ready: false });
+    }
+});
+
 app.post('/grep-command', async (req, res) => {
     try {
         const output = await runOnBase(req.body.command, 5000);

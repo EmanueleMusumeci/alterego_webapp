@@ -1,4 +1,4 @@
-import { pingRemoteComputer, showSyncedPopup} from '../api.js';
+import { isBaseReady, showSyncedPopup} from '../api.js';
 import { STATE } from '../constants.js';
 import { updateUI } from '../utils.js';
 import { robotPowerOnClick, pauseProcedures, restartFromPauseProcedures, endChargeProcedures } from '../workflow.js';
@@ -25,7 +25,8 @@ export async function handleMainButtonClick(ws, state, robotName) {
 
     try {
         // Verifica connessione al computer base
-        const isRemoteComputerOnline = await pingRemoteComputer();
+        state.baseReady = await isBaseReady();
+        const isRemoteComputerOnline = state.baseReady;
         logStartupEvent(attemptId, 'button.base_ping', { outcome: isRemoteComputerOnline ? 'ok' : 'failed' });
         if (!isRemoteComputerOnline) {
             // Mostra errore se non connesso

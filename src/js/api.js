@@ -190,6 +190,15 @@ export async function waitForNodes(nodeNames, timeoutMs = 15000) {
  * Checks connection with remote computer via ping
  * @returns {Promise<boolean>} True if connection successful, false otherwise
  */
+export async function isBaseReady() {
+    try {
+        const response = await fetch('/api/base-ready');
+        return response.ok && (await response.json()).ready === true;
+    } catch (error) {
+        return false;
+    }
+}
+
 export async function pingRemoteComputer() {
     try {
         const response = await fetch('/ping', {

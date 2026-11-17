@@ -41,7 +41,8 @@ export function updateUI(state) {
     // Aggiorna stato dei pulsanti
     switch(state.pipelineState){
         case STATE.INIT:
-            mainBtn.disabled = false;        
+            mainBtn.disabled = !state.baseReady;
+            if (!state.baseReady) document.querySelector('#systemStatus + span').textContent = 'Waiting for base computer';
             secondBtn.disabled = false;        
             updateMainBtn('start_robot');
             updateSecondBtn('power_off');

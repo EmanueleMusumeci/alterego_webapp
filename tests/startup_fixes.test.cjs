@@ -117,6 +117,57 @@ async function testLaunchOutputGoesToFile() {
     fs.rmSync(home, { recursive: true, force: true });
 }
 
+async function testStartWaitsForBase() {
+    // updateUI: Start disabled in INIT until the base answers over SSH.
+    const els = {};
+    const el = () => ({ disabled: null, style: {}, textContent: '', innerHTML: '', classList: { add() {}, remove() {} } });
+    const document = { getElementById: id => (els[id] = els[id] || el()), querySelector: q => (els[q] = els[q] || el()) };
+    const utils = await loadModule('utils.js', {
+        './api.js': { sendLocalCommand() {} },
+        './batterymonitor.js': { batteryMonitor: { getPowerAlert: () => false } },
+        './constants.js': {
+            STATE: { INIT: 0, WORK_MODE: 3 },
+            UI_STATES: { POWER_ON: {}, POWER_OFF: {}, SYSTEM_RUNNING: {}, SYSTEM_READY: {} }
+        }
+    }, { document, localStorage: {} });
+    utils.updateUI({ pipelineState: 0, baseReady: false });
+    assert.equal(els.mainBtn.disabled, true);
+    assert.equal(els['#systemStatus + span'].textContent, 'Waiting for base computer');
+    utils.updateUI({ pipelineState: 0, baseReady: true });
+    assert.equal(els.mainBtn.disabled, false);
+
+    // isBaseReady reads /api/base-ready and treats any failure as not ready.
+    let reply;
+    const api = await loadModule('api.js', {
+        './batterymonitor.js': { batteryMonitor: {} },
+        './constants.js': { NUC_BASE_IP: '', ROS_CATKIN_WS: '', ROS_HOSTNAME: '', ROS_IP: '', ROS_MASTER_URI: '',
+            ROS_SRC_FOLDER: '', ROS_COMMANDS: { SETUP: '' }, LAUNCH_COMMANDS: {} },
+        './utils.js': { updateBatteryGraphics() {} },
+        './startupLog.js': { logStartupEvent() {} }
+    }, { fetch: async (url) => { assert.equal(url, '/api/base-ready'); return reply(); } });
+    reply = () => ({ ok: true, json: async () => ({ ready: true }) });
+    assert.equal(await api.isBaseReady(), true);
+    reply = () => ({ ok: true, json: async () => ({ ready: false }) });
+    assert.equal(await api.isBaseReady(), false);
+    reply = () => { throw new Error('offline'); };
+    assert.equal(await api.isBaseReady(), false);
+
+    // A Start press with the base not ready does not start the robot.
+    let starts = 0;
+    const state = { pipelineState: 0, isPowered: false, baseReady: true };
+    const handler = await loadModule('handlerButtonClick/handleMainButtonClick.js', {
+        '../api.js': { isBaseReady: async () => false, showSyncedPopup: async () => true },
+        '../constants.js': { STATE: { INIT: 0, DOCKED: 1, RECOVERY_FROM_EMERGENCY: 2, WORK_MODE: 3, PAUSED: 4 } },
+        '../utils.js': { updateUI() {} },
+        '../workflow.js': { robotPowerOnClick: async () => { starts++; return true; },
+            pauseProcedures() {}, restartFromPauseProcedures() {}, endChargeProcedures() {} },
+        '../startupLog.js': { logStartupEvent() {}, newStartupAttemptId: () => 't' }
+    }, { document: { getElementById: () => ({ disabled: false }) } });
+    await handler.handleMainButtonClick({ send() {} }, state, R);
+    assert.equal(starts, 0);
+    assert.equal(state.baseReady, false);
+}
+
 // A hung await leaves the event loop empty and node exits 0: fail unless the end is reached.
 process.exitCode = 1;
 (async () => {
@@ -126,6 +177,7 @@ process.exitCode = 1;
     await testResumeStaysPaused();
     await testOptionalNodesDoNotAbort();
     await testLaunchOutputGoesToFile();
+    await testStartWaitsForBase();
     console.log('startup fixes tests passed');
     process.exitCode = 0;
 })().catch(error => { console.error(error); process.exitCode = 1; });

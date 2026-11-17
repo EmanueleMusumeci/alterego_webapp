@@ -40,7 +40,7 @@ async function testStartStaysBusy() {
     const state = { pipelineState: 0, isPowered: false, isRunning: false };
     const ws = { send() {} };
     const handler = await loadModule('handlerButtonClick/handleMainButtonClick.js', {
-        '../api.js': { pingRemoteComputer: async () => true, showSyncedPopup: async () => true },
+        '../api.js': { isBaseReady: async () => true, showSyncedPopup: async () => true },
         '../constants.js': { STATE: { INIT: 0, DOCKED: 1, RECOVERY_FROM_EMERGENCY: 2, WORK_MODE: 3, PAUSED: 4 } },
         '../utils.js': { updateUI() { updates++; } },
         '../workflow.js': {

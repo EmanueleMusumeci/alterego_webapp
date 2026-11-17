@@ -6,7 +6,7 @@ HOST=${CHECK_HOST:-emanuele@100.85.38.88}
 DEST=/tmp/alterego-webapp-check
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 
-rsync -a --delete --exclude node_modules "$REPO/src" "$REPO/tests" "$HOST:$DEST/"
+rsync -a --delete --exclude node_modules "$REPO/src" "$REPO/tests" "$REPO/package.json" "$REPO/package-lock.json" "$HOST:$DEST/"
 ssh "$HOST" bash -s <<REMOTE
 set -euo pipefail
 cd $DEST
@@ -18,4 +18,5 @@ done
 rm -rf "\$tmp"
 echo "browser modules check ok"
 docker run --rm -v $DEST:/w node:10-alpine sh -c 'node --check /w/src/webapp.js && node --check /w/src/js/websocket.js && echo node10 check ok'
+docker run --rm -v $DEST:/w -w /w node:10-alpine sh /w/tests/server_check.sh
 REMOTE
