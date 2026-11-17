@@ -4,7 +4,8 @@ import { ClickMonitor, clickMonitorClose, UnlockClickMonitor } from './handlerBu
 import { handleSecondButtonClick } from './handlerButtonClick/handleSecondButtonClick.js';
 
 // Importa le costanti e le funzioni utilities necessarie
-import { updateUI, loadComponent, closeAdminMenu, settingsAction, setVolume, closeVolumeMenu } from './utils.js';
+import { updateUI, loadComponent, closeAdminMenu, setVolume, closeVolumeMenu } from './utils.js';
+import { initSettingsPanel, openSettingsPanel, openStatusPanel } from './settingsPanel.js';
 import { getRobotName, isBaseReady, sendCommand, showSyncedPopup, startBatteryCheck } from './api.js';
 import { batteryMonitor } from './batterymonitor.js';
 import { LAUNCH_COMMANDS, ROS_COMMANDS, STATE , initializeConfig } from './constants.js';
@@ -86,6 +87,7 @@ async function initApp() {
     // Carica i componenti UI
     const resLoad = await loadComponent('button-grid', 'components/button-grid.html');
     const resComp = await loadComponent('status-panel', 'components/status-panel.html');
+    await loadComponent('settings-panel', 'components/settings-panel.html');
 
     // Connect after the controls exist: the server sends state immediately on connect.
     initWebSocket();
@@ -109,7 +111,9 @@ async function initApp() {
     // Aggiungi event listener
     mainBtn.addEventListener('click', () => handleMainButtonClick(ws, state, robotName));   
     secondBtn.addEventListener('click',  () => handleSecondButtonClick(ws, state, robotName));
-    settingsBtn.addEventListener('click',  () => settingsAction());
+    settingsBtn.addEventListener('click',  () => openSettingsPanel());
+    document.getElementById('statusBtn').addEventListener('click', () => openStatusPanel());
+    initSettingsPanel({ getWs: () => ws, state, robotName });
     volumeBtn.addEventListener('click',  () => setVolume());
     closeBtn.addEventListener('click',  () => clickMonitorClose(monitor, unlockMonitor));
 

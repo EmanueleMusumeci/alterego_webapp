@@ -3,6 +3,7 @@ import { batteryMonitor } from './batterymonitor.js';
 import { ROS_COMMANDS, LAUNCH_COMMANDS, STATE } from './constants.js';
 import { showLoading, updateUI } from './utils.js';
 import { logStartupEvent, newStartupAttemptId } from './startupLog.js';
+import { loadSettings, getSetting } from './settings.js';
 
 var batteryInterval;
 
@@ -52,7 +53,12 @@ async function startPowerMonitor(ws, state, robotName){
                         pipelineState: fsmState, detail: `need=${batteryMonitor.getNeedCharge()} ${batteryDetail()}`
                     });
                     // Detect and handle change in power alert 
-                    if (fsmState == STATE.WORK_MODE && batteryMonitor.getNeedCharge()){
+                    // Driving home needs navigation: not in the 'static' and 'balance' start modes.
+                    const canDriveHome = state.startMode !== 'static' && state.startMode !== 'balance';
+                    if (fsmState == STATE.WORK_MODE && batteryMonitor.getNeedCharge() && !canDriveHome){
+                        logStartupEvent(newStartupAttemptId(), 'battery.home_skipped', { detail: `mode=${state.startMode}` });
+                    }
+                    if (fsmState == STATE.WORK_MODE && batteryMonitor.getNeedCharge() && canDriveHome){
                         // Triggered when need_for_charge = true
 
                         // Send Home to Charge
@@ -87,7 +93,7 @@ async function startPowerMonitor(ws, state, robotName){
                             fsmState != STATE.DOCKED &&
                             fsmState != STATE.RECOVERY_FROM_EMERGENCY){
                             // Emergency Button must deactivate the robot that is working
-                            emergencyButtonPressed(ws, state);
+                            emergencyButtonPressed(ws, state, robotName);
                         }
                         
                     }
@@ -219,6 +225,93 @@ export async function activateRobotProcedures(ws, robotName, attemptId) {
     return true;
 }
 
+// Settings > Movimento "Head movements": the face tracker keeps detecting faces but stops moving
+// the head while auto_mode_status is false. Latched for 30 s, so a face tracker that starts within
+// that time still receives it (it starts with head motion on). Not awaited.
+export function applyHeadMotion(robotName, enabled) {
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ` +
+        `timeout 30 rostopic pub -l /${robotName}/face_tracking/auto_mode_status std_msgs/Bool "data: ${enabled}"`);
+}
+
+// Settings > Movimento "Gestures" also covers the breathing rosbag, which moves the body.
+function startBreath(robotName, attemptId) {
+    if (!getSetting('gestures')) {
+        logStartupEvent(attemptId, 'startup.service', { stage: 'breath', outcome: 'skipped', detail: 'gestures=false' });
+        return false;
+    }
+    logStartupEvent(attemptId, 'startup.service', { stage: 'breath', outcome: 'dispatched' });
+    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BREATH}`,
+        { attemptId, stage: 'breath' });
+    return true;
+}
+
+export function startBreathNow(robotName) {
+    return startBreath(robotName, newStartupAttemptId());
+}
+
+// Settings > Comunicazione "Restart speech": stop both speech nodes, launch both, wait until both run.
+export async function restartSpeech(ws, robotName) {
+    const attemptId = newStartupAttemptId();
+    logStartupEvent(attemptId, 'speech.restart', { outcome: 'dispatched' });
+    showLoading(true);
+    try {
+        sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && rosnode kill /${robotName}/speech2text /${robotName}/text2speech`);
+        await new Promise(r => setTimeout(r, 3000));
+        await startAudio(ws, robotName, attemptId);
+        return await ensureSpeechReady(robotName, attemptId);
+    } finally {
+        showLoading(false);
+    }
+}
+
+export function stopBreath(robotName) {
+    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && rosnode kill /${robotName}${LAUNCH_COMMANDS.STOP_BREATH}`);
+}
+
+function setStartMode(ws, state, mode) {
+    state.startMode = mode;
+    ws.send(JSON.stringify({ type: 'stateUpdate', data: { startMode: mode } }));
+}
+
+// Tour nodes only (the robot must already be in WORK_MODE after a full start).
+async function launchTourNodes(robotName, attemptId) {
+    const [obstacles, navServer, stateMachine] = LAUNCH_COMMANDS.TOUR_NODES.map(n => `/${robotName}${n}`);
+    logStartupEvent(attemptId, 'tour.phase', { stage: 'tour_navigation', outcome: 'dispatched' });
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.TOUR_NAVIGATION}`,
+        { attemptId, stage: 'tour_navigation' });
+    const nav = await waitForNodes([obstacles, navServer], 30000);
+    logStartupEvent(attemptId, 'tour.check', { stage: 'tour_navigation', outcome: nav.ready ? 'passed' : 'failed', detail: nav.missing.join(',') });
+    if (!nav.ready) return false;
+    logStartupEvent(attemptId, 'tour.phase', { stage: 'tour_state_machine', outcome: 'dispatched' });
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.TOUR_STATE_MACHINE}`,
+        { attemptId, stage: 'tour_state_machine' });
+    const sm = await waitForNodes([stateMachine], 30000);
+    logStartupEvent(attemptId, 'tour.check', { stage: 'tour_state_machine', outcome: sm.ready ? 'passed' : 'failed', detail: sm.missing.join(',') });
+    return sm.ready;
+}
+
+// Pause, Home and the emergency button stop the tour: its state machine drives the robot.
+export function stopTour(robotName) {
+    const nodes = LAUNCH_COMMANDS.TOUR_NODES.map(n => `/${robotName}${n}`).join(' ');
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && rosnode kill ${nodes}`);
+}
+
+// Start Tour: full start first when the robot is off, otherwise only the tour nodes.
+export async function startTour(ws, state, robotName, attemptId = newStartupAttemptId()) {
+    if (state.pipelineState != STATE.WORK_MODE) {
+        if (!(await robotPowerOnClick(ws, state, robotName, attemptId, 'full'))) return false;
+    }
+    showLoading(true);
+    try {
+        const ok = await launchTourNodes(robotName, attemptId);
+        if (ok) setStartMode(ws, state, 'tour');
+        else stopTour(robotName);
+        return ok;
+    } finally {
+        showLoading(false);
+    }
+}
+
 // Face tracking and breath are not required for WORK_MODE: log a miss, do not abort.
 async function checkOptionalNode(attemptId, stage, node) {
     const check = await waitForNodes([node], 15000);
@@ -250,7 +343,28 @@ export async function ensureSpeechReady(robotName, attemptId) {
     return check.ready;
 }
 
-export async function standUpProcedures(ws, robotName, attemptId) {
+// "Start without motion": roscore, face tracking, TTS and STT only. No IMU, wheels, body
+// activation, backward move, breath or navigation, so the robot can be tested while it must not move.
+async function staticProcedures(ws, robotName, attemptId) {
+    logStartupEvent(attemptId, 'startup.phase', { stage: 'roscore', outcome: 'dispatched', detail: 'mode=static' });
+    const accepted = await sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.ROSCORE}`,
+        { attemptId, stage: 'roscore' });
+    if (!accepted) return false;
+    const master = await waitForNodes(['/rosout'], 15000);
+    logStartupEvent(attemptId, 'startup.check', { stage: 'ros_master', outcome: master.ready ? 'passed' : 'failed' });
+    if (!master.ready) return false;
+    await new Promise(r => setTimeout(r, 5000));
+    // Head motion stays off in this mode whatever the setting: the head is a motor too.
+    applyHeadMotion(robotName, false);
+    logStartupEvent(attemptId, 'startup.service', { stage: 'face_tracking', outcome: 'dispatched' });
+    sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_TRACKING}`,
+        { attemptId, stage: 'face_tracking' });
+    await checkOptionalNode(attemptId, 'face_tracking', `/${robotName}/face_tracker`);
+    await startAudio(ws, robotName, attemptId);
+    return ensureSpeechReady(robotName, attemptId);
+}
+
+export async function standUpProcedures(ws, robotName, attemptId, { navigation = true } = {}) {
 
     // Initialize system (activates wheels and arms (activation e movement))
     logStartupEvent(attemptId, 'startup.phase', { stage: 'system', outcome: 'checking' });
@@ -272,7 +386,8 @@ export async function standUpProcedures(ws, robotName, attemptId) {
     sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_EXPRESSION}`,
         { attemptId, stage: 'face_expression' });
 
-    // Start FACE TRACKING and FACE RECOGNITION
+    // Start FACE TRACKING and FACE RECOGNITION (head-motion setting published first, latched)
+    if (!getSetting('headMotion')) applyHeadMotion(robotName, false);
     logStartupEvent(attemptId, 'startup.service', { stage: 'face_tracking', outcome: 'dispatched' });
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_TRACKING}`,
         { attemptId, stage: 'face_tracking' });
@@ -282,13 +397,16 @@ export async function standUpProcedures(ws, robotName, attemptId) {
     await startAudio(ws, robotName, attemptId);
 
     // Start Breath Rosbag
-    logStartupEvent(attemptId, 'startup.service', { stage: 'breath', outcome: 'dispatched' });
-    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BREATH}`,
-        { attemptId, stage: 'breath' });
-    await checkOptionalNode(attemptId, 'breath', `/${robotName}/rosbag_play`);
+    if (startBreath(robotName, attemptId)) await checkOptionalNode(attemptId, 'breath', `/${robotName}/rosbag_play`);
 
     // STT and TTS must be up before WORK_MODE (11 Nov: WORK_MODE was reported with STT dead).
     if (!(await ensureSpeechReady(robotName, attemptId))) return false;
+
+    // "Balance only" start: the robot stands and balances, no navigation and no drive to the target.
+    if (!navigation) {
+        logStartupEvent(attemptId, 'startup.service', { stage: 'navigation', outcome: 'skipped', detail: 'mode=balance' });
+        return true;
+    }
 
     // Start Navigation
     logStartupEvent(attemptId, 'startup.service', { stage: 'navigation', outcome: 'dispatched' });
@@ -455,13 +573,18 @@ function setStartFailed(ws, state, stage) {
     ws.send(JSON.stringify({ type: 'stateUpdate', data: { startFailed: stage } }));
 }
 
-export async function robotPowerOnClick(ws, state, robotName, attemptId = newStartupAttemptId()) {
+// mode: 'full' (normal start), 'balance' (stand and balance, no navigation),
+// 'static' (no motion: roscore, face tracking, speech). Retry keeps the mode of the failed start.
+export async function robotPowerOnClick(ws, state, robotName, attemptId = newStartupAttemptId(), mode) {
 
     // Only straight after a failed stand-up (state persists across reloads; INIT means a full start).
     const retryStandUp = state.startFailed === 'stand_up' && state.pipelineState == STATE.STAND_UP;
+    mode = retryStandUp ? (state.startMode || 'full') : (mode || 'full');
     logStartupEvent(attemptId, 'startup.begin', { pipelineState: state.pipelineState, isPowered: state.isPowered,
-        detail: retryStandUp ? 'retry_from=stand_up' : '' });
+        detail: `mode=${mode}` + (retryStandUp ? ' retry_from=stand_up' : '') });
     setStartFailed(ws, state, false);
+    setStartMode(ws, state, mode);
+    await loadSettings();
     robotName = await getRobotName();   // Doubled to be sure
 
     showLoading(true);
@@ -470,7 +593,7 @@ export async function robotPowerOnClick(ws, state, robotName, attemptId = newSta
     stopPowerMonitor();
     startPowerMonitor(ws, state, robotName);
 
-    if (!retryStandUp) {
+    if (!retryStandUp && mode !== 'static') {
     // Notify next workflow state
     updatePipelineState(ws, state, STATE.ACTIVATE_ROBOT);
     logStartupEvent(attemptId, 'startup.state', { stage: 'activate_robot', pipelineState: state.pipelineState });
@@ -488,7 +611,9 @@ export async function robotPowerOnClick(ws, state, robotName, attemptId = newSta
     logStartupEvent(attemptId, 'startup.state', { stage: 'stand_up', pipelineState: state.pipelineState });
     
     // Activate all the rest of nodes 
-    if (!(await standUpProcedures(ws, robotName, attemptId))){
+    const stoodUp = mode === 'static' ? await staticProcedures(ws, robotName, attemptId)
+        : await standUpProcedures(ws, robotName, attemptId, { navigation: mode === 'full' });
+    if (!stoodUp){
         logStartupEvent(attemptId, 'startup.failed', { stage: 'stand_up', pipelineState: state.pipelineState });
         setStartFailed(ws, state, 'stand_up');
         return false;
@@ -530,6 +655,7 @@ export async function robotPowerOffClick(ws, state, do_check = true, attemptId =
 }
 
 export async function robotHomeClick(ws, state, robotName) {
+    if (state.startMode === 'tour') { stopTour(robotName); setStartMode(ws, state, 'full'); }
 
     showLoading(true);
 
@@ -545,18 +671,21 @@ export async function robotHomeClick(ws, state, robotName) {
 
 export async function restartFromPauseProcedures(ws, state, robotName) {
     const attemptId = newStartupAttemptId();
-    logStartupEvent(attemptId, 'resume.begin', { pipelineState: state.pipelineState });
+    logStartupEvent(attemptId, 'resume.begin', { pipelineState: state.pipelineState, detail: `mode=${state.startMode}` });
+    await loadSettings();
+    const noMotion = state.startMode === 'static';
     showLoading(true);
     try {
-    // Start FACE TRACKING
+    // Start FACE TRACKING (head-motion setting published first, latched)
+    if (noMotion || !getSetting('headMotion')) applyHeadMotion(robotName, false);
     sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.FACE_TRACKING}`);
     await checkOptionalNode(attemptId, 'face_tracking', `/${robotName}/face_tracker`);
 
     // Start Audio Services
     await reStartAudio(ws, robotName);
 
-    // Start Breath Rosbag
-    sendCommand(`${ROS_COMMANDS.SETUP} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.BREATH}`);
+    // Start Breath Rosbag (not in the no-motion mode)
+    if (!noMotion) startBreath(robotName, attemptId);
 
     if (!(await ensureSpeechReady(robotName, attemptId))) {
         logStartupEvent(attemptId, 'resume.failed', { stage: 'speech', pipelineState: state.pipelineState });
@@ -578,6 +707,7 @@ export async function restartFromPauseProcedures(ws, state, robotName) {
 }
 
 export async function pauseProcedures(ws, state, robotName) {
+    if (state.startMode === 'tour') { stopTour(robotName); setStartMode(ws, state, 'full'); }
 
     showLoading(true);
 
@@ -619,7 +749,11 @@ export async function dockingProcedures(ws, state, maxLinDistance, robotName) {
     // TODO: Check is_docked condition when having automatic docking procedure ready
     if (maxLinDistance == 0.0){
         //while (!batteryMonitor.getIsCharging()){
-            if (batteryMonitor.getBatteryLevel() < 20) {
+            await loadSettings();
+            if (batteryMonitor.getBatteryLevel() < 20 && !getSetting('autoShutdownOnDock')) {
+                logStartupEvent(newStartupAttemptId(), 'shutdown.auto_skipped', { detail: `setting=off ${batteryDetail()}` });
+            }
+            else if (batteryMonitor.getBatteryLevel() < 20) {
                 const attemptId = newStartupAttemptId();
                 logStartupEvent(attemptId, 'shutdown.auto', { detail: `reason=low_battery_docked ${batteryDetail()}` });
                 sendLocalCommand(`${ROS_COMMANDS.SETUP_LOCAL} && export ROBOT_NAME=${robotName} && ${LAUNCH_COMMANDS.SAY_TIRED}`);
@@ -681,10 +815,11 @@ export async function restartAuto(ws, state, robotName) {
     return true;
 }
 
-export async function emergencyButtonPressed(ws, state) {
+export async function emergencyButtonPressed(ws, state, robotName) {
     // Triggered when power_alert = true
 
     // Deactivate Robot
+    if (state.startMode === 'tour') stopTour(robotName);
     deactivateRobot(ws);
 
     // Notify next workflow state

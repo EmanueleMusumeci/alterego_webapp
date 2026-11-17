@@ -45,7 +45,7 @@ async function testStartStaysBusy() {
         '../utils.js': { updateUI() { updates++; } },
         '../workflow.js': {
             robotPowerOnClick: async () => { starts++; return startup; },
-            pauseProcedures() {}, restartFromPauseProcedures() {}, endChargeProcedures() {}
+            pauseProcedures() {}, restartFromPauseProcedures() {}, endChargeProcedures() {}, startTour() {}
         },
         '../startupLog.js': { logStartupEvent() {}, newStartupAttemptId: () => 'test-attempt' }
     }, { document: { getElementById: () => button } });

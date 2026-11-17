@@ -13,8 +13,9 @@ function anyCommand(name, known = {}) {
 
 const EVENT_RE = /^([a-z]+\.)?[a-z_]{2,40}$/;  // server whitelist in src/webapp.js
 
-async function loadWorkflow({ present, onLaunch = () => {}, battery = {} }) {
-    const log = { launches: [], events: [], popups: [], order: [] };
+async function loadWorkflow({ present, onLaunch = () => {}, battery = {}, settings = {} }) {
+    const log = { launches: [], events: [], popups: [], order: [], commands: [], calls: [] };
+    const cfg = { autoShutdownOnDock: true, headMotion: true, gestures: true, ...settings };
     let ids = 0;
     const waitForNodes = async (nodes) => {
         const missing = nodes.filter(n => !present.has(n));
@@ -23,10 +24,11 @@ async function loadWorkflow({ present, onLaunch = () => {}, battery = {} }) {
     const never = new Promise(() => {});
     const wf = await loadModule('workflow.js', {
         './api.js': {
-            sendCommand: async () => true,
+            sendCommand: async (cmd) => { log.commands.push(cmd); log.order.push(cmd); return true; },
             sendLocalCommand: (cmd) => { log.launches.push(cmd); log.order.push(cmd); onLaunch(cmd); return never; },
-            getRobotName: async () => R, initializeIMU: async () => true,
-            handleDockingMovement: async () => true, initializeSystem: async () => true,
+            getRobotName: async () => R, initializeIMU: async () => { log.calls.push('imu'); return true; },
+            handleDockingMovement: async () => { log.calls.push('docking'); return true; },
+            initializeSystem: async () => { log.calls.push('system'); return true; },
             waitForPowerAlertTrigger: async () => true,
             showSyncedPopup: async (_ws, p) => { log.popups.push(p.title); return true; },
             targetReachedCheck: async () => true, checkNodeStatus: async () => true,
@@ -41,10 +43,13 @@ async function loadWorkflow({ present, onLaunch = () => {}, battery = {} }) {
         './constants.js': {
             ROS_COMMANDS: { SETUP: 'base', SETUP_LOCAL: 'local', CLEAR_LOG: 'clear' },
             LAUNCH_COMMANDS: anyCommand('', { TTS: 'launch_tts', STT2: 'launch_stt', FACE_TRACKING: 'launch_face',
-                BREATH: 'launch_breath', SAY_TIRED: 'launch_say_tired' }),
+                BREATH: 'launch_breath', SAY_TIRED: 'launch_say_tired', NAVIGATION: 'launch_nav', ROSCORE: 'launch_roscore',
+                TOUR_NAVIGATION: 'launch_tour_nav', TOUR_STATE_MACHINE: 'launch_tour_sm',
+                TOUR_NODES: ['/obstacle_manager', '/navigation_server', '/top_level_state_machine_node'] }),
             STATE: { INIT: 0, ACTIVATE_ROBOT: 1, STAND_UP: 2, WORK_MODE: 3, PAUSED: 4 }
         },
         './utils.js': { showLoading() {}, updateUI() {} },
+        './settings.js': { loadSettings: async () => cfg, getSetting: k => cfg[k] },
         './startupLog.js': {
             logStartupEvent: (id, event, f) => {
                 assert.match(event, EVENT_RE, `event name ${event} must pass the server whitelist`);
@@ -175,7 +180,7 @@ async function testStartWaitsForBase() {
         '../constants.js': { STATE: { INIT: 0, DOCKED: 1, RECOVERY_FROM_EMERGENCY: 2, WORK_MODE: 3, PAUSED: 4 } },
         '../utils.js': { updateUI() {} },
         '../workflow.js': { robotPowerOnClick: async () => { starts++; return true; },
-            pauseProcedures() {}, restartFromPauseProcedures() {}, endChargeProcedures() {} },
+            pauseProcedures() {}, restartFromPauseProcedures() {}, endChargeProcedures() {}, startTour() {} },
         '../startupLog.js': { logStartupEvent() {}, newStartupAttemptId: () => 't' }
     }, { document: { getElementById: () => ({ disabled: false }) } });
     await handler.handleMainButtonClick({ send() {} }, state, R);
@@ -246,6 +251,60 @@ async function testRetryAfterFailedStart() {
     assert.match(els.mainBtn.innerHTML, /Retry/);
 }
 
+const NAV = [`/${R}/move_base`, `/${R}/navigation`];
+const has = (list, re) => list.some(c => re.test(c));
+
+async function testStartModes() {
+    // Start without motion: no IMU, body, docking move, breath or navigation; head off before face tracking.
+    let w = await loadWorkflow({ present: new Set([TTS, STT, '/rosout']) });
+    let state = { pipelineState: 0 };
+    assert.equal(await w.wf.robotPowerOnClick({ send() {} }, state, R, 'a', 'static'), true);
+    assert.equal(state.pipelineState, 3);
+    assert.equal(state.startMode, 'static');
+    assert.deepEqual(w.log.calls, [], 'static start must not call IMU, system or docking');
+    assert.ok(!has(w.log.commands, /launch_breath|launch_nav|target_location/), 'static start: no breath or navigation');
+    const headOff = w.log.order.findIndex(c => /auto_mode_status std_msgs\/Bool "data: false"/.test(c));
+    assert.ok(headOff >= 0 && headOff < w.log.order.findIndex(c => /launch_face$/.test(c)), 'head off is published before face tracking starts');
+
+    // Balance only: body activation yes, navigation no.
+    w = await loadWorkflow({ present: new Set([TTS, STT, '/rosout']) });
+    state = { pipelineState: 0 };
+    assert.equal(await w.wf.robotPowerOnClick({ send() {} }, state, R, 'a', 'balance'), true);
+    assert.ok(w.log.calls.includes('imu') && w.log.calls.includes('system'));
+    assert.ok(!has(w.log.commands, /launch_nav|target_location/), 'balance start: no navigation');
+
+    // Gestures off: no breathing rosbag; head motion on: no head-off message.
+    w = await loadWorkflow({ present: new Set([TTS, STT, '/rosout', ...NAV]), settings: { gestures: false } });
+    assert.equal(await w.wf.robotPowerOnClick({ send() {} }, { pipelineState: 0 }, R, 'a'), true);
+    assert.ok(!has(w.log.commands, /launch_breath/));
+    assert.ok(has(w.log.commands, /launch_nav/), 'full start still launches navigation');
+    assert.ok(!has(w.log.launches, /auto_mode_status/));
+}
+
+async function testAutoShutdownSetting() {
+    const { wf, log } = await loadWorkflow({ present: new Set(), settings: { autoShutdownOnDock: false },
+        battery: { getBatteryLevel: () => 12, getReadingAgeMs: () => 800, getIsDocked: () => true } });
+    assert.equal(await wf.dockingProcedures({ send() {} }, { pipelineState: 3 }, 0.0, R), true);
+    await new Promise(r => setTimeout(r, 50));
+    assert.ok(!has(log.launches, /launch_say_tired/), 'no say_tired when auto power-off is off');
+    assert.ok(!log.events.some(e => e.event === 'shutdown.begin'), 'no power-off when auto power-off is off');
+    assert.ok(log.events.some(e => e.event === 'shutdown.auto_skipped'));
+}
+
+async function testTour() {
+    const tour = ['/obstacle_manager', '/navigation_server', '/top_level_state_machine_node'].map(n => `/${R}${n}`);
+    const { wf, log } = await loadWorkflow({ present: new Set([...tour]) });
+    const state = { pipelineState: 3, startMode: 'full' };
+    assert.equal(await wf.startTour({ send() {} }, state, R, 'a'), true);
+    assert.equal(state.startMode, 'tour');
+    assert.ok(!has(log.commands, /launch_roscore/), 'robot already started: tour nodes only');
+    const nav = log.launches.findIndex(c => /launch_tour_nav$/.test(c));
+    const sm = log.launches.findIndex(c => /launch_tour_sm$/.test(c));
+    assert.ok(nav >= 0 && sm > nav, 'navigation server before the tour state machine');
+    await wf.pauseProcedures({ send() {} }, state, R);
+    assert.ok(has(log.launches, /rosnode kill .*top_level_state_machine_node/), 'pause stops the tour');
+}
+
 // A hung await leaves the event loop empty and node exits 0: fail unless the end is reached.
 process.exitCode = 1;
 (async () => {
@@ -259,6 +318,9 @@ process.exitCode = 1;
     await testBatteryAge();
     await testLowBatteryShutdownLogged();
     await testRetryAfterFailedStart();
+    await testStartModes();
+    await testAutoShutdownSetting();
+    await testTour();
     console.log('startup fixes tests passed');
     process.exitCode = 0;
 })().catch(error => { console.error(error); process.exitCode = 1; });

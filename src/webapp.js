@@ -32,6 +32,43 @@ if (isolatedTest) {
     });
 }
 
+// Recent [startup] entries for the on-screen log (Settings > Generale); the journal keeps all of them.
+const recentStartup = [];
+function logStartupEntry(entry) {
+    console.log('[startup] ' + JSON.stringify(entry));
+    recentStartup.push(entry);
+    if (recentStartup.length > 50) recentStartup.shift();
+}
+app.get('/api/startup-log/recent', (_req, res) => res.json(recentStartup.slice(-20).reverse()));
+
+// Robot settings shown on the touch screen. Only these keys, only booleans; stored next to state.json.
+const SETTINGS_DEFAULTS = { autoShutdownOnDock: true, headMotion: true, gestures: true };
+const settingsFile = path.join(__dirname, 'js', 'settings.json');
+function readSettings() {
+    try {
+        const saved = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+        const out = Object.assign({}, SETTINGS_DEFAULTS);
+        Object.keys(SETTINGS_DEFAULTS).forEach(k => { if (typeof saved[k] === 'boolean') out[k] = saved[k]; });
+        return out;
+    } catch (error) {
+        return Object.assign({}, SETTINGS_DEFAULTS);
+    }
+}
+app.get('/api/settings', (_req, res) => res.json(readSettings()));
+app.post('/api/settings', (req, res) => {
+    const body = req.body || {};
+    const keys = Object.keys(body);
+    if (!keys.length || keys.some(k => !(k in SETTINGS_DEFAULTS) || typeof body[k] !== 'boolean')) {
+        return res.status(400).json({ error: 'Invalid settings' });
+    }
+    const next = Object.assign(readSettings(), body);
+    fs.writeFileSync(settingsFile + '.tmp', JSON.stringify(next, null, 2));
+    fs.renameSync(settingsFile + '.tmp', settingsFile);
+    logStartupEntry({ serverTime: new Date().toISOString(), attemptId: 'settings', event: 'settings.changed',
+        detail: keys.map(k => `${k}=${body[k]}`).join(' ') });
+    res.json(next);
+});
+
 app.post('/api/startup-log', (req, res) => {
     const { attemptId, event, clientTime, stage, outcome, pipelineState, isPowered, detail } = req.body || {};
     if (typeof attemptId !== 'string' || !/^[a-z0-9-]{1,40}$/i.test(attemptId) ||
@@ -46,7 +83,7 @@ app.post('/api/startup-log', (req, res) => {
     if (Number.isInteger(pipelineState)) entry.pipelineState = pipelineState;
     if (typeof isPowered === 'boolean') entry.isPowered = isPowered;
     if (typeof detail === 'string') entry.detail = detail.replace(/[\r\n]/g, ' ').slice(0, 160);
-    console.log('[startup] ' + JSON.stringify(entry));
+    logStartupEntry(entry);
     res.status(204).end();
 });
 
@@ -59,7 +96,7 @@ function logStartupCommand(req, event, outcome, detail) {
         event, stage: startupStage, outcome
     };
     if (detail !== undefined) entry.detail = String(detail).replace(/[\r\n]/g, ' ').slice(0, 100);
-    console.log('[startup] ' + JSON.stringify(entry));
+    logStartupEntry(entry);
 }
 
 // Static file serving
@@ -322,6 +359,37 @@ app.get('/api/base-ready', async (_req, res) => {
     } catch (error) {
         res.json({ ready: false });
     }
+});
+
+// Read-only facts for the Status section. Backend URLs: the STT/TTS servers the robot uses (verify on site).
+const BACKENDS = [
+    { name: 'stt', url: 'http://10.70.114.3:8000/v1/models' },
+    { name: 'tts', url: 'http://10.70.114.3:5050/' }
+];
+function probeHttp(url) {
+    return new Promise(resolve => {
+        const req = require('http').get(url, { timeout: 2000 }, r => { r.resume(); resolve(true); });
+        req.on('timeout', () => { req.destroy(); resolve(false); });
+        req.on('error', () => resolve(false));
+    });
+}
+function sh(command) {
+    return new Promise(resolve => exec(command, { timeout: 3000 }, (error, stdout) => resolve(error ? '' : stdout.trim())));
+}
+app.get('/api/status', async (_req, res) => {
+    const [commit, branch, disk, baseUptime, backends] = await Promise.all([
+        sh(`git -C ${__dirname} rev-parse --short HEAD`),
+        sh(`git -C ${__dirname} rev-parse --abbrev-ref HEAD`),
+        sh('df -h --output=avail / | tail -1'),
+        runOnBase('cut -d" " -f1 /proc/uptime', 3000).catch(() => null),
+        Promise.all(BACKENDS.map(b => probeHttp(b.url).then(ok => ({ name: b.name, ok }))))
+    ]);
+    res.json({
+        webapp: { commit, branch },
+        vision: { uptimeS: Math.round(os.uptime()), diskFree: disk },
+        base: { reachable: baseUptime !== null, uptimeS: baseUptime ? Math.round(parseFloat(baseUptime)) : null },
+        backends
+    });
 });
 
 app.post('/grep-command', async (req, res) => {

@@ -26,6 +26,31 @@ const deadline = Date.now() + 20000;
 }
 
 probe "no key"
+
+# Settings store, status and recent log (no robot needed).
+node -e '
+const http = require("http");
+function call(method, path, body) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port: 3999, path, method, headers: { "Content-Type": "application/json" } }, r => {
+      let b = ""; r.on("data", d => b += d); r.on("end", () => resolve({ code: r.statusCode, body: b }));
+    });
+    req.on("error", reject); if (body) req.write(JSON.stringify(body)); req.end();
+  });
+}
+(async () => {
+  const bad1 = await call("POST", "/api/settings", { headMotion: "no" });
+  const bad2 = await call("POST", "/api/settings", { rm: true });
+  const ok = await call("POST", "/api/settings", { gestures: false });
+  const get = JSON.parse((await call("GET", "/api/settings")).body);
+  const status = JSON.parse((await call("GET", "/api/status")).body);
+  const log = JSON.parse((await call("GET", "/api/startup-log/recent")).body);
+  const pass = bad1.code === 400 && bad2.code === 400 && ok.code === 200 && get.gestures === false &&
+    get.headMotion === true && get.autoShutdownOnDock === true && status.base.reachable === false &&
+    Array.isArray(status.backends) && log.some(e => e.event === "settings.changed");
+  console.log("settings/status/log:", pass ? "ok" : "FAIL", JSON.stringify({ bad1: bad1.code, bad2: bad2.code, get, base: status.base }));
+  process.exit(pass ? 0 : 1);
+})();' || { cat /tmp/server.log; exit 1; }
 mkdir -p "/home/$(whoami)/.ssh"
 node -e 'const { generateKeyPairSync } = require("crypto");
 process.stdout.write(generateKeyPairSync("rsa", { modulusLength: 2048,

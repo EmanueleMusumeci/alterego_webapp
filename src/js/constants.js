@@ -121,6 +121,10 @@ export function updateLaunchCommands() {
     LAUNCH_COMMANDS.SAY_TIRED = 'roslaunch alterego_say_tired say_tired.launch';
     LAUNCH_COMMANDS.SAY_MOVE_OVER = 'roslaunch alterego_adjust_docking say_move_over.launch';
     LAUNCH_COMMANDS.BREATH = 'roslaunch alterego_rosbags_play play_breath.launch';
+    // Tour (alterego_interaction on the vision PC): navigation server first, then the tour state machine.
+    LAUNCH_COMMANDS.TOUR_NAVIGATION = toLaunchLog('tour_navigation', 'roslaunch alterego_interaction navigation.launch');
+    LAUNCH_COMMANDS.TOUR_STATE_MACHINE = toLaunchLog('tour_state_machine', 'roslaunch alterego_interaction state_machine.launch');
+    LAUNCH_COMMANDS.TOUR_NODES = ['/obstacle_manager', '/navigation_server', '/top_level_state_machine_node'];
     
     // Additional constants
     LAUNCH_COMMANDS.TARGET_LOC = 'Mostra1';

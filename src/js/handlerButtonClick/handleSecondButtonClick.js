@@ -18,7 +18,9 @@ export async function handleSecondButtonClick(ws, state, robotName) {
         if (state.pipelineState == STATE.INIT ||
             state.pipelineState == STATE.DOCKED ||
             state.pipelineState == STATE.RECOVERY_FROM_EMERGENCY ||
-            state.startFailed){
+            state.startFailed ||
+            // No navigation in these modes, so Home cannot drive to the dock: offer Power Off.
+            state.startMode === 'static' || state.startMode === 'balance'){
 
             // First popup - Global warning
             const warnAnsw = await showSyncedPopup(ws, {

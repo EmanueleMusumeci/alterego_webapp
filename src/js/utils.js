@@ -61,12 +61,13 @@ export function updateUI(state) {
             mainBtn.disabled = false;
             secondBtn.disabled = false;        
             updateMainBtn('pause');
-            updateSecondBtn('home');
+            updateSecondBtn(state.startMode === 'static' || state.startMode === 'balance' ? 'power_off' : 'home');
             break;
         case STATE.PAUSED:
             mainBtn.disabled = false;        
             secondBtn.disabled = false;        
             updateMainBtn('play');
+            if (state.startMode === 'static' || state.startMode === 'balance') updateSecondBtn('power_off');
             break;
         case STATE.DOCKED:
             mainBtn.disabled = false;        
@@ -221,14 +222,6 @@ export async function setVolume() {
 }
 
 // Funzione per l'azione Settings
-export function settingsAction() {
-    // Esempio di azione: mostra un messaggio
-    alert('Settings... TODO');
-    
-    closeAdminMenu(); // Chiude il popup dopo l'azione
-}
-
-// Funzione per chiudere il popup
 export function closeAdminMenu() {
     document.getElementById('popupOverlay').style.display = 'none';
     document.getElementById('popup').style.display = 'none';

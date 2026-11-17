@@ -1,7 +1,7 @@
 import { isBaseReady, showSyncedPopup} from '../api.js';
 import { STATE } from '../constants.js';
 import { updateUI } from '../utils.js';
-import { robotPowerOnClick, pauseProcedures, restartFromPauseProcedures, endChargeProcedures } from '../workflow.js';
+import { robotPowerOnClick, pauseProcedures, restartFromPauseProcedures, endChargeProcedures, startTour } from '../workflow.js';
 import { logStartupEvent, newStartupAttemptId } from '../startupLog.js';
 
 let mainButtonBusy = false;
@@ -139,5 +139,54 @@ export async function handleMainButtonClick(ws, state, robotName) {
         mainButtonBusy = false;
         updateUI(state);
         logStartupEvent(attemptId, 'button.settled', { pipelineState: state.pipelineState, isPowered: state.isPowered });
+    }
+}
+
+const START_MODES = {
+    static: { title: 'Start without motion', text: 'Starts ROS, face tracking and speech only. No wheels, no body activation, no head motion. Continue?' },
+    balance: { title: 'Start balance only', text: 'The robot moves back from the dock, stands up and balances. No navigation. Continue?' },
+    tour: { title: 'Start Tour', text: 'The robot will drive the tour autonomously. Keep the area clear. Continue?' }
+};
+
+// Start buttons on the Settings page. Same guards as Start: one action at a time, base reachable, confirm.
+export async function handleStartMode(ws, state, robotName, mode) {
+    const attemptId = newStartupAttemptId();
+    if (mainButtonBusy) {
+        logStartupEvent(attemptId, 'button.ignored', { outcome: 'busy', detail: `mode=${mode}` });
+        return false;
+    }
+    const tourOnly = mode === 'tour' && state.pipelineState == STATE.WORK_MODE;
+    const startable = state.pipelineState == STATE.INIT || state.pipelineState == STATE.DOCKED ||
+        state.pipelineState == STATE.RECOVERY_FROM_EMERGENCY || state.startFailed;
+    if (!tourOnly && !startable) {
+        await showSyncedPopup(ws, { title: START_MODES[mode].title, text: 'Not available now: power off or finish the current start first.', icon: 'info' });
+        return false;
+    }
+    mainButtonBusy = true;
+    try {
+        state.baseReady = await isBaseReady();
+        if (!state.baseReady) {
+            await showSyncedPopup(ws, { title: 'ERROR', text: 'Base computer not connected', icon: 'error' });
+            return false;
+        }
+        const ok = await showSyncedPopup(ws, {
+            title: START_MODES[mode].title, text: START_MODES[mode].text, icon: 'warning',
+            showCancelButton: true, allowOutsideClick: false, allowEscapeKey: false, confirmButtonText: 'OK'
+        });
+        logStartupEvent(attemptId, 'button.confirm', { outcome: ok ? 'accepted' : 'cancelled', detail: `mode=${mode}` });
+        if (!ok) return false;
+        if (!tourOnly) {
+            state.isPowered = true;
+            ws.send(JSON.stringify({ type: 'stateUpdate', data: { isPowered: true } }));
+        }
+        const started = mode === 'tour' ? await startTour(ws, state, robotName, attemptId)
+            : await robotPowerOnClick(ws, state, robotName, attemptId, mode);
+        if (!started) {
+            await showSyncedPopup(ws, { title: 'Startup incomplete', text: `${START_MODES[mode].title} did not finish. See Settings > Generale > Startup log.`, icon: 'error' });
+        }
+        return started;
+    } finally {
+        mainButtonBusy = false;
+        updateUI(state);
     }
 }
